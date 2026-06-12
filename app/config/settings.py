@@ -46,9 +46,34 @@ class Settings(BaseSettings):
     # ── GitHub ────────────────────────────────────────────────
     github_token: str = ""
 
+    # ── LinkedIn (Browser Automation) ─────────────────────────
+    linkedin_email: str = ""
+    linkedin_password: str = ""
+    linkedin_url: str = ""
+
+    # ── Browser Automation ────────────────────────────────────
+    browser_headless: bool = True
+    browser_timeout_ms: int = 30_000
+
     # ── Telegram ──────────────────────────────────────────────
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+
+    # ── Job Applier API Keys ────────────────────────────────────
+    greenhouse_api_key: str = ""
+    lever_api_key: str = ""
+    ashby_api_key: str = ""
+
+    # ── SMTP (Email Applier) ─────────────────────────────────
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+
+    # ── Auto-Apply Configuration ─────────────────────────────
+    auto_apply_enabled: bool = True
+    auto_apply_max_per_cycle: int = 5
 
     # ── Job Search / Scraping ────────────────────────────────
     default_search_location: str = "remote"

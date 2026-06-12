@@ -123,6 +123,16 @@ def main() -> None:
     portfolio_service = PortfolioService()
     # Portfolio requires explicit load_portfolio() call — not loaded here
 
+    # ── Job applier (optional) ───────────────────────────
+    from app.jobs.applier import JobApplier
+
+    job_applier: JobApplier | None = None
+    if settings.auto_apply_enabled:
+        job_applier = JobApplier()
+        logger.info("Job applier initialised (auto-apply enabled)")
+    else:
+        logger.info("Auto-apply disabled by configuration")
+
     # ── Application pipeline ────────────────────────────────
     from app.pipeline.application_pipeline import ApplicationPipeline
 
@@ -134,6 +144,7 @@ def main() -> None:
         resume_generator=resume_generator,
         cover_letter_generator=cover_gen,
         repository=repository,
+        job_applier=job_applier,
         github_service=github_service,
         portfolio_service=portfolio_service,
         notifier=notifier,

@@ -31,6 +31,8 @@ from app.cover_letter.generator import CoverLetterGenerator
 from app.database.firestore_repository import FirestoreRepository
 from app.github.github_service import GithubService
 from app.github.models import GithubProject
+from app.jobs.applier import JobApplier
+from app.jobs.appliers.base import ApplierResult
 from app.models.application import Application, ApplicationStatus
 from app.models.job import Job
 from app.portfolio.models import PortfolioProject
@@ -64,11 +66,15 @@ class PipelineResult:
         cover_letter_path: Path to the generated cover letter file, or
             empty string if none was produced.
         status: Pipeline exit status — one of ``"REJECTED"``,
-            ``"COMPLETED"``, or ``"ERROR"``.
+            ``"COMPLETED"``, ``"AUTO_APPLIED"``, or ``"ERROR"``.
         rejection_reason: Human-readable explanation when the job was
             rejected, or empty string otherwise.
         error_message: Error details when ``status == "ERROR"``, or
             empty string otherwise.
+        auto_submit_success: Whether auto-submit succeeded.  ``None``
+            if auto-applier was not configured.
+        auto_submit_method: Which submission method was used.
+        confirmation_url: Provider-side confirmation URL.
     """
 
     job_id: str = ""
@@ -81,6 +87,9 @@ class PipelineResult:
     status: str = "ERROR"
     rejection_reason: str = ""
     error_message: str = ""
+    auto_submit_success: Optional[bool] = None
+    auto_submit_method: str = ""
+    confirmation_url: str = ""
 
 
 class ApplicationPipeline:
@@ -94,12 +103,13 @@ class ApplicationPipeline:
     * GitHub and portfolio project analysis
     * Resume tailoring and file generation (DOCX + PDF)
     * Cover-letter generation (DOCX)
+    * Auto-application submission (via Greenhouse/Lever/Ashby API or email)
     * Firestore persistence
     * Telegram notification
 
     All dependencies are injected via the constructor so the pipeline
     is fully testable and works with or without optional services
-    (GitHub, portfolio, Telegram).
+    (GitHub, portfolio, Telegram, applier).
     """
 
     def __init__(
@@ -111,6 +121,7 @@ class ApplicationPipeline:
         resume_generator: ResumeGenerator,
         cover_letter_generator: CoverLetterGenerator,
         repository: FirestoreRepository,
+        job_applier: JobApplier | None = None,
         github_service: GithubService | None = None,
         portfolio_service: PortfolioService | None = None,
         notifier: Notifier | None = None,
@@ -127,6 +138,8 @@ class ApplicationPipeline:
             cover_letter_generator: Cover-letter generator.
             repository: Firestore repository for persisting
                 applications.
+            job_applier: Optional :class:`JobApplier` for automatic
+                submission.  When ``None``, auto-apply is skipped.
             github_service: Optional GitHub service (skipped when
                 ``None`` or when no profile has been loaded).
             portfolio_service: Optional portfolio service (skipped
@@ -136,6 +149,8 @@ class ApplicationPipeline:
             output_dir: Base output directory for generated files.
                 Per-job subdirectories are created automatically.
         """
+        from app.config.settings import Settings as _Settings  # noqa: PLC0415
+
         self._ats = ats_scorer
         self._matcher = job_matcher
         self._recommender = recommendation_engine
@@ -143,10 +158,15 @@ class ApplicationPipeline:
         self._resume_gen = resume_generator
         self._cover_gen = cover_letter_generator
         self._repository = repository
+        self._applier = job_applier
         self._github = github_service
         self._portfolio = portfolio_service
         self._notifier = notifier
         self._output_dir = Path(output_dir)
+        self._settings = _Settings()
+        self._auto_apply_enabled = (
+            self._applier is not None and self._settings.auto_apply_enabled
+        )
 
     # ── Public API ───────────────────────────────────────────
 
@@ -368,7 +388,63 @@ class ApplicationPipeline:
                 job_id,
             )
 
-        # ── 9. Store application record ────────────────────
+        # ── 9. Auto-apply (optional) ────────────────────────
+        auto_submit_success: Optional[bool] = None
+        auto_submit_method: str = ""
+        confirmation_url: str = ""
+        applier_result: ApplierResult | None = None
+
+        if self._auto_apply_enabled:
+            try:
+                applier_result = self._applier.submit(
+                    candidate_name=resume.name,
+                    candidate_email=resume.email,
+                    candidate_phone=resume.phone,
+                    resume_path=resume_path,
+                    cover_letter_path=cover_letter_path,
+                    job_title=role,
+                    job_apply_url=job_url,
+                    job_description=job.description,
+                    job_source=job.source,
+                    extra={"company": company},
+                )
+
+                auto_submit_success = applier_result.success
+                auto_submit_method = applier_result.application_method.value
+                confirmation_url = applier_result.confirmation_url
+
+                if applier_result.success:
+                    logger.info(
+                        "Auto-apply successful",
+                        extra={
+                            "job_id": job_id,
+                            "method": auto_submit_method,
+                            "app_id": applier_result.application_id,
+                        },
+                    )
+                else:
+                    logger.warning(
+                        "Auto-apply failed",
+                        extra={
+                            "job_id": job_id,
+                            "method": auto_submit_method,
+                            "error": applier_result.error_message,
+                        },
+                    )
+            except Exception as exc:
+                logger.exception(
+                    "Auto-apply raised unhandled error for job %s — continuing",
+                    job_id,
+                )
+                auto_submit_success = False
+                auto_submit_error = str(exc)
+        else:
+            logger.info(
+                "Auto-apply skipped (applier not configured or disabled)",
+                extra={"job_id": job_id},
+            )
+
+        # ── 10. Store application record ────────────────────
         try:
             app_id = hashlib.sha256(
                 f"{job_id}:{datetime.now(timezone.utc).isoformat()}".encode(),
@@ -385,6 +461,14 @@ class ApplicationPipeline:
                 status=ApplicationStatus.APPLIED,
                 applied_at=datetime.now(timezone.utc),
                 job_url=job_url,
+                application_method=auto_submit_method,
+                auto_submit_success=auto_submit_success,
+                auto_submit_error=(
+                    applier_result.error_message
+                    if auto_submit_success is False and applier_result is not None
+                    else ""
+                ),
+                confirmation_url=confirmation_url,
             )
             self._repository.save_application(application)
             logger.info(
@@ -397,13 +481,18 @@ class ApplicationPipeline:
                 job_id,
             )
 
-        # ── 10. Send Telegram notification ─────────────────
+        # ── 11. Send Telegram notification ─────────────────
         if self._notifier is not None:
             try:
+                status_text = "APPLIED" + (
+                    f" (auto: {'SUCCESS' if auto_submit_success else 'FAILED'})"
+                    if auto_submit_success is not None
+                    else ""
+                )
                 self._notifier.send_application_update(
                     company=company,
                     role=role,
-                    status="APPLIED",
+                    status=status_text,
                     match_score=job_match.score,
                     job_url=job_url,
                 )
@@ -413,6 +502,12 @@ class ApplicationPipeline:
                     job_id,
                 )
 
+        overall_status = "COMPLETED"
+        if auto_submit_success is True:
+            overall_status = "AUTO_APPLIED"
+        elif auto_submit_success is False:
+            overall_status = "AUTO_APPLY_FAILED"
+
         return PipelineResult(
             job_id=job_id,
             company=company,
@@ -421,7 +516,10 @@ class ApplicationPipeline:
             ats_score=ats_result.total_score,
             resume_path=resume_path,
             cover_letter_path=cover_letter_path,
-            status="COMPLETED",
+            status=overall_status,
+            auto_submit_success=auto_submit_success,
+            auto_submit_method=auto_submit_method,
+            confirmation_url=confirmation_url,
         )
 
     # ── Project selection ────────────────────────────────────

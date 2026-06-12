@@ -105,6 +105,10 @@ class FirestoreRepository:
             "status": application.status.name,
             "applied_at": application.applied_at,
             "job_url": application.job_url,
+            "application_method": application.application_method,
+            "auto_submit_success": application.auto_submit_success,
+            "auto_submit_error": application.auto_submit_error,
+            "confirmation_url": application.confirmation_url,
         }
 
     @staticmethod
@@ -130,6 +134,10 @@ class FirestoreRepository:
             status=status,
             applied_at=_ensure_datetime(data.get("applied_at")),
             job_url=data.get("job_url", ""),
+            application_method=data.get("application_method", ""),
+            auto_submit_success=data.get("auto_submit_success"),
+            auto_submit_error=data.get("auto_submit_error", ""),
+            confirmation_url=data.get("confirmation_url", ""),
         )
 
     # ------------------------------------------------------------------

@@ -40,6 +40,13 @@ class Application:
             :attr:`ApplicationStatus.NEW`.
         applied_at: Timestamp of when the application was submitted.
         job_url: Direct link to the original job posting.
+        application_method: How the application was submitted (e.g.
+            ``"greenhouse_api"``, ``"email"``, ``"manual"``).  Empty string
+            if not yet submitted.
+        auto_submit_success: Whether the auto-submission succeeded.
+            ``None`` if auto-submit was not attempted.
+        auto_submit_error: Error message from auto-submission, if any.
+        confirmation_url: Provider-side confirmation or tracking URL.
     """
 
     id: str
@@ -52,3 +59,7 @@ class Application:
     status: ApplicationStatus = ApplicationStatus.NEW
     applied_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     job_url: str = ""
+    application_method: str = ""
+    auto_submit_success: Optional[bool] = None
+    auto_submit_error: str = ""
+    confirmation_url: str = ""

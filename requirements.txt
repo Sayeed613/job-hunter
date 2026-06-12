@@ -29,3 +29,7 @@ tenacity>=8.0.0
 # ── Development ─────────────────────────────────────────────
 # pytest       # uncomment when writing tests
 # pytest-cov   # uncomment when measuring coverage
+
+# ── Development ─────────────────────────────────────────────
+# pytest       # uncomment when writing tests
+# pytest-cov   # uncomment when measuring coverage
