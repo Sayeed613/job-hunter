@@ -11,13 +11,13 @@ import logging
 import random
 from typing import Optional
 
-from playwright.async_api import Page
+from playwright.async_api import ElementHandle, Page
 
 from app.browser.human import Human
 
 logger = logging.getLogger("job_automation_bot")
 
-# ── Candidate profile (hardcoded from spec Section 1) ────────
+# ── Candidate profile ────────────────────────────────────────
 CANDIDATE = {
     "first_name": "Sayeed",
     "last_name": "Ahmed",
@@ -29,21 +29,26 @@ CANDIDATE = {
     "state": "Karnataka",
     "country": "India",
     "linkedin": "",
-    "github": "",
+    "github": "https://github.com/Sayeed613",
     "portfolio": "",
-    "years_experience": "",
+    "years_experience": "1",
     "current_company": "",
-    "current_title": "",
+    "current_title": "Frontend Developer",
     "notice_period": "Immediate",
     "willing_to_relocate": "No",
     "work_authorization": "Yes, I am authorized to work in India",
     "salary_expectation": "Negotiable",
     "referral": "",
+    "highest_education": "Bachelor of Computer Applications (BCA)",
+    "university": "Sabarmathi University",
+    "graduation_year": "2024",
+    "cover_letter_available": "Yes",
+    "remote_ok": "Yes",
+    "timezone": "IST (UTC+5:30)",
+    "languages": "English, Hindi, Kannada",
 }
 
 # ── Semantic field mapping ───────────────────────────────────
-# Keys are tuples of substrings to match against
-# (name, id, placeholder, aria-label concatenated).
 _FIELD_MAP: list[tuple[tuple[str, ...], str]] = [
     (("first", "fname", "firstname", "given"), "first_name"),
     (("last", "lname", "lastname", "surname", "family"), "last_name"),
@@ -67,6 +72,20 @@ _FIELD_MAP: list[tuple[tuple[str, ...], str]] = [
     (("referral", "how did you hear"), "referral"),
 ]
 
+# ── Dropdown keyword matching ────────────────────────────────
+# Maps candidate field keys to lists of option substrings to prefer.
+_DROPDOWN_MATCH: dict[str, list[str]] = {
+    "country": ["india", "in"],
+    "years_experience": ["0-1", "1", "0 to 1", "fresher", "entry level", "junior", "<1"],
+    "notice_period": ["immediate", "0 day", "0 day notice", "currently serving"],
+    "state": ["karnataka", "bangalore"],
+    "city": ["bangalore", "bengaluru"],
+    "willing_to_relocate": ["no", "not willing"],
+    "work_authorization": ["yes", "authorized", "authorised", "eligible", "work permit"],
+    "highest_education": ["bachelor", "bca", "b.sc", "b.e", "b.tech", "graduate"],
+    "graduation_year": ["2024", "2023", "2022"],
+}
+
 
 class FormFiller:
     """Detects form type and fills all fields with candidate data.
@@ -89,7 +108,6 @@ class FormFiller:
             resume_path: Path to the tailored resume file for upload.
             cover_letter_text: Cover letter text for textarea fields.
         """
-        # Wait for the form to stabilize
         await Human.delay(1.5, 3.0)
 
         # Get all interactive elements
@@ -123,7 +141,7 @@ class FormFiller:
     async def _fill_element(
         self,
         page: Page,
-        elem: Page,
+        elem: ElementHandle,
         resume_path: str,
         cover_letter_text: str,
     ) -> None:
@@ -144,10 +162,15 @@ class FormFiller:
         except Exception:
             pass
 
-        # Build selector
-        selector = f"#{elem_id}" if elem_id else f"[name='{name}']" if name else None
+        # Build selector — try id, then name, then placeholder as fallback
+        selector = (
+            f"#{elem_id}" if elem_id
+            else f"[name='{name}']" if name
+            else f"[placeholder='{placeholder}']" if placeholder
+            else None
+        )
         if not selector:
-            return
+            return  # Cannot target this element — skip
 
         # ── FILE UPLOAD ──
         if input_type == "file":
@@ -155,13 +178,14 @@ class FormFiller:
                 await elem.set_input_files(resume_path)
             return
 
-        # ── SELECT / DROPDOWN ──
+        # ── SELECT / DROPDOWN (smart) ──
         if tag == "select":
-            options = await elem.evaluate(
-                "el => Array.from(el.options).map(o => o.value)"
-            )
-            if len(options) > 1:
-                await elem.select_option(options[1])
+            await self._fill_select(elem, hint)
+            return
+
+        # ── RADIO BUTTONS ──
+        if input_type == "radio":
+            await self._fill_radio(page, elem, name, hint)
             return
 
         # ── CHECKBOX ──
@@ -182,8 +206,13 @@ class FormFiller:
             await elem.click()
             await asyncio.sleep(random.uniform(0.3, 0.7))
             await elem.fill("")
-            for ch in cover_letter_text:
-                await page.keyboard.type(ch, delay=random.randint(30, 100))
+            if len(cover_letter_text) > 500:
+                # Fast path: use fill() for long cover letters
+                await elem.fill(cover_letter_text)
+            else:
+                # Slow path: type character by character for short fields
+                for ch in cover_letter_text:
+                    await page.keyboard.type(ch, delay=random.randint(30, 100))
             return
 
         # ── TEXT / EMAIL / TEL FIELDS ──
@@ -195,6 +224,98 @@ class FormFiller:
                 await Human.type_text(page, selector, value)
                 return
 
-        # ── FALLBACK: generic text input ──
-        if input_type in ("text", "email", "tel", "url", "search", "number"):
-            await Human.type_text(page, selector, "Interested in this opportunity")
+        # ── NO FALLBACK — silently skip unknown fields ────────
+        # Do NOT type garbage into unknown fields — it causes form validation failures.
+
+    # ── Smart select/dropdown filling ─────────────────────────
+
+    async def _fill_select(self, elem: ElementHandle, hint: str) -> None:
+        """Fill a select dropdown by matching hints against candidate values."""
+        # Try to get the full option data (values + labels)
+        options_data = await elem.evaluate("""\
+            el => Array.from(el.options).map(o => ({
+                value: o.value,
+                text: o.textContent.trim().toLowerCase()
+            }))
+        """)
+
+        if not options_data or len(options_data) <= 1:
+            return
+
+        # Determine which candidate field this dropdown maps to
+        matched_field: Optional[str] = None
+        for keys, field_key in _FIELD_MAP:
+            if any(k in hint for k in keys):
+                matched_field = field_key
+                break
+
+        # If we matched a field, try to find the best option
+        if matched_field:
+            preferred = _DROPDOWN_MATCH.get(matched_field, [])
+            candidate_val = CANDIDATE.get(matched_field, "").lower()
+
+            # Try candidate value first
+            for opt in options_data:
+                if candidate_val and candidate_val in opt["text"]:
+                    await elem.select_option(opt["value"])
+                    return
+
+            # Try preferred substrings
+            for kw in preferred:
+                for opt in options_data:
+                    if kw in opt["text"]:
+                        await elem.select_option(opt["value"])
+                        return
+
+        # Fallback: pick index 1 (skip the default "Choose..." or "Select..." option)
+        if len(options_data) > 1:
+            await elem.select_option(options_data[1]["value"])
+
+    # ── Radio button filling ─────────────────────────────────
+
+    async def _fill_radio(self, page: Page, elem: ElementHandle, name: str, hint: str) -> None:
+        """Fill a radio button group by choosing the appropriate option."""
+        # Get all radio buttons in the same group
+        radio_selector = f"input[type='radio'][name='{name}']"
+        radios = await page.query_selector_all(radio_selector)
+        if not radios:
+            return
+
+        # Read label text for each radio option
+        for radio in radios:
+            radio_id = await radio.get_attribute("id") or ""
+            label = await page.evaluate(f"""\
+                () => {{
+                    const el = document.querySelector('label[for="{radio_id}"]');
+                    return el ? el.textContent.trim().toLowerCase() : '';
+                }}
+            """)
+            if not label:
+                # Try to get the parent label
+                parent_text = await radio.evaluate("""\
+                    el => {{
+                        const parent = el.closest('label');
+                        return parent ? parent.textContent.trim().toLowerCase() : '';
+                    }}
+                """)
+                label = parent_text or ""
+
+            if not label:
+                continue
+
+            # For yes/no groups
+            if any(w in hint for w in ["authorization", "authorised", "eligible",
+                                        "work permit", "remote", "relocate"]):
+                if "yes" in label:
+                    await radio.check()
+                    return
+            # For experience/level groups
+            elif any(w in hint for w in ["experience", "level", "years"]):
+                if any(kw in label for kw in ["0-1", "1", "fresher", "entry", "junior"]):
+                    await radio.check()
+                    return
+            # For education groups
+            elif any(w in hint for w in ["education", "degree"]):
+                if any(kw in label for kw in ["bachelor", "graduate", "bca", "b.sc"]):
+                    await radio.check()
+                    return

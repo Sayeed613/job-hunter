@@ -78,12 +78,29 @@ async def main() -> None:
     providers: list = []
 
     for mod_name, cls_name in [
+        # HTTP API providers (reliable)
         ("app.jobs.providers.remoteok", "RemoteOKProvider"),
         ("app.jobs.providers.weworkremotely", "WeWorkRemotelyProvider"),
+        ("app.jobs.providers.remotive", "RemotiveProvider"),
+        ("app.jobs.providers.himalayas", "HimalayasProvider"),
+        ("app.jobs.providers.findwork", "FindworkProvider"),
+        ("app.jobs.providers.workingnomads", "WorkingNomadsProvider"),
+        # HTML-scrape providers (medium reliability)
+        ("app.jobs.providers.wellfound", "WellfoundProvider"),
+        ("app.jobs.providers.ycombinator", "YCombinatorProvider"),
+        ("app.jobs.providers.jobspresso", "JobspressoProvider"),
+        ("app.jobs.providers.remoteco", "RemoteCoProvider"),
+        ("app.jobs.providers.web3career", "Web3CareerProvider"),
+        ("app.jobs.providers.arcdev", "ArcDevProvider"),
+        ("app.jobs.providers.landingjobs", "LandingJobsProvider"),
+        ("app.jobs.providers.europeremotely", "EuropeRemotelyProvider"),
+        # Browser-based providers (need Playwright session)
         ("app.jobs.providers.linkedin", "LinkedInProvider"),
         ("app.jobs.providers.indeed", "IndeedProvider"),
         ("app.jobs.providers.naukri", "NaukriProvider"),
-        ("app.jobs.providers.wellfound", "WellfoundProvider"),
+        ("app.jobs.providers.dice", "DiceProvider"),
+        ("app.jobs.providers.ziprecruiter", "ZipRecruiterProvider"),
+        ("app.jobs.providers.glassdoor", "GlassdoorProvider"),
     ]:
         try:
             import importlib

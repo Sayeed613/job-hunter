@@ -34,20 +34,29 @@ class TelegramNotifier:
     # ── Core async send ──────────────────────────────────────
 
     async def send_message(self, text: str) -> bool:
-        """Send a Markdown-formatted message via async HTTP."""
+        """Send a message via async HTTP using HTML parse mode (more forgiving than Markdown)."""
         if not self._available:
             return False
         try:
             url = _API_BASE.format(token=self._token, method="sendMessage")
+            # Convert Markdown-style bold (**text**) to HTML <b>text</b>
+            import re
+            html_text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+            # Escape HTML special characters in the rest
+            html_text = html_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            # Restore the <b> tags we just created
+            html_text = html_text.replace('&lt;b&gt;', '<b>').replace('&lt;/b&gt;', '</b>')
             payload = {
                 "chat_id": self._chat_id,
-                "text": text,
-                "parse_mode": "Markdown",
+                "text": html_text,
+                "parse_mode": "HTML",
             }
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
-                        logger.warning("Telegram API returned %d", resp.status)
+                        body = await resp.text()
+                        if "chat not found" not in body:
+                            logger.warning("Telegram API returned %d: %s", resp.status, body[:200])
                     return resp.status == 200
         except Exception:
             logger.exception("Telegram send failed")

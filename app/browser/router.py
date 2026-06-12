@@ -42,6 +42,24 @@ class ApplicationRouter:
             await self._browser.launch(headless=headless)
             self._initialised = True
 
+    @property
+    def is_browser_ready(self) -> bool:
+        """True if the browser is launched and ready for use."""
+        return self._initialised and self._browser is not None
+
+    def get_browser(self) -> BrowserManager:
+        """Get the shared BrowserManager instance.
+
+        Returns:
+            The BrowserManager.
+
+        Raises:
+            RuntimeError: If the browser has not been launched yet.
+        """
+        if not self._browser or not self._initialised:
+            raise RuntimeError("Browser not launched. Call ensure_browser() first.")
+        return self._browser
+
     async def close_browser(self) -> None:
         if self._browser:
             await self._browser.close()

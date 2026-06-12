@@ -54,10 +54,11 @@ class Settings(BaseSettings):
     max_experience: int = 6
     run_interval_hours: int = 2
     max_applications_per_cycle: int = 15
+    max_job_age_hours: int = 48
 
     # ── Browser ──────────────────────────────────────────────
     headless: bool = True
     browser_timeout_ms: int = 30_000
 
     # ── Paths ────────────────────────────────────────────────
-    base_resume_path: str = "resumes/Sayeed_Ahmed_Resume.docx"
+    base_resume_path: str = "Sayeed_Frontend_Developer.docx"

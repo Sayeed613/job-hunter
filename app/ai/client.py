@@ -16,7 +16,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
-from openai import APITimeoutError, APIStatusError, APIConnectionError
+from openai import APITimeoutError, APIStatusError, APIConnectionError, AuthenticationError
 
 from app.config.settings import Settings
 
@@ -64,8 +64,14 @@ class AIClient:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type(
-            (APITimeoutError, APIConnectionError, APIStatusError),
+        retry=lambda rs: (
+            rs.outcome is None  # Allow first attempt
+            or (
+                rs.outcome.failed
+                and not isinstance(rs.outcome.exception(), AuthenticationError)
+                and isinstance(rs.outcome.exception(),
+                               (APITimeoutError, APIConnectionError, APIStatusError))
+            )
         ),
         reraise=True,
     )

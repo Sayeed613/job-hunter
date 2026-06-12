@@ -95,8 +95,11 @@ class Scheduler:
 
     def stop(self) -> None:
         """Gracefully shut down the scheduler."""
-        self._scheduler.shutdown(wait=False)
-        logger.info("Scheduler stopped")
+        try:
+            self._scheduler.shutdown(wait=False)
+            logger.info("Scheduler stopped")
+        except Exception:
+            logger.debug("Scheduler was not running — ignoring")
 
     # ── Jobs ──────────────────────────────────────────────────
 
