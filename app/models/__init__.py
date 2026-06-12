@@ -1,10 +1,9 @@
-"""Domain models for Project Headhunter."""
+"""Domain models for the Job Automation Bot."""
 
-from app.models.application import Application, ApplicationStatus
+from app.models.application import Application
 from app.models.job import Job
 
 __all__ = [
     "Application",
-    "ApplicationStatus",
     "Job",
 ]

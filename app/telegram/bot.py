@@ -7,9 +7,9 @@ from typing import Optional
 
 from app.config.settings import Settings
 from app.database.firestore_repository import FirestoreRepository
-from app.models.application import Application, ApplicationStatus
+from app.models.application import Application
 
-logger = logging.getLogger("headhunter")
+logger = logging.getLogger("job_automation_bot")
 
 try:
     from telegram import Update
@@ -109,12 +109,12 @@ class Bot:
         total = len(apps)
         counts: dict[str, int] = {}
         for a in apps:
-            counts[a.status.name] = counts.get(a.status.name, 0) + 1
+            counts[a.status] = counts.get(a.status, 0) + 1
 
         lines = [f"📊 *Stats*\n  Total: {total}"]
-        for status in ApplicationStatus:
-            c = counts.get(status.name, 0)
-            lines.append(f"  {status.name}: {c}")
+        for status_name in ["applied", "failed", "manual_review"]:
+            c = counts.get(status_name, 0)
+            lines.append(f"  {status_name}: {c}")
 
         await update.message.reply_text("\n".join(lines))
 
@@ -143,7 +143,7 @@ class Bot:
             score = f" ({a.match_score:.0%})" if a.match_score is not None else ""
             lines.append(
                 f"  • *{a.company}* — {a.role}{score}\n"
-                f"    Status: {a.status.name}  |  {a.applied_at.strftime('%b %d')}"
+                f"    Status: {a.status}  |  {a.applied_at.strftime('%b %d')}"
             )
 
         await update.message.reply_text("\n\n".join(lines))
@@ -179,7 +179,7 @@ class Bot:
             score = f" ({a.match_score:.0%})" if a.match_score is not None else ""
             lines.append(
                 f"  • *{a.role}*{score}\n"
-                f"    Status: {a.status.name}  |  {a.applied_at.strftime('%b %d')}"
+                f"    Status: {a.status}  |  {a.applied_at.strftime('%b %d')}"
             )
 
         await update.message.reply_text("\n\n".join(lines))
@@ -195,7 +195,7 @@ class Bot:
             return
 
         all_apps = repo.list_recent_applications(limit=200)
-        interviews = [a for a in all_apps if a.status == ApplicationStatus.INTERVIEW]
+        interviews = [a for a in all_apps if a.interview_status in ("phone_screen", "onsite", "offer")]
 
         if not interviews:
             await update.message.reply_text(

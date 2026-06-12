@@ -1,65 +1,60 @@
-"""Application domain model for Project Headhunter."""
+"""Application domain model for the Job Automation Bot."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum, auto
 from typing import Optional
-
-
-class ApplicationStatus(Enum):
-    """Tracks the lifecycle of a job application."""
-
-    NEW = auto()
-    APPLIED = auto()
-    SHORTLISTED = auto()
-    REJECTED = auto()
-    INTERVIEW = auto()
-    OFFER = auto()
-
-    def __str__(self) -> str:
-        return self.name
 
 
 @dataclass
 class Application:
-    """Represents a job application submitted or tracked by the user.
+    """Represents a job application submitted or tracked by the system.
 
     Attributes:
-        id: Unique identifier for this application record.
-        job_id: Foreign key referencing the associated :class:`Job`.
-        company: Name of the hiring company (denormalised for quick access).
-        role: Job title or role name applied for.
-        resume_version: Identifier or path of the resume version used.
-        cover_letter_version: Identifier or path of the cover letter version
-            used (empty string if not provided).
-        match_score: Optional relevance score (0.0 – 1.0) computed by the
-            matching pipeline.
-        status: Current stage in the application lifecycle.  Defaults to
-            :attr:`ApplicationStatus.NEW`.
-        applied_at: Timestamp of when the application was submitted.
-        job_url: Direct link to the original job posting.
-        application_method: How the application was submitted (e.g.
-            ``"greenhouse_api"``, ``"email"``, ``"manual"``).  Empty string
-            if not yet submitted.
-        auto_submit_success: Whether the auto-submission succeeded.
-            ``None`` if auto-submit was not attempted.
-        auto_submit_error: Error message from auto-submission, if any.
-        confirmation_url: Provider-side confirmation or tracking URL.
+        job_id: Unique identifier (sha256 of company+title).
+        title: Job title.
+        company: Company name.
+        location: Job location.
+        remote_type: "Remote", "Hybrid", or "Onsite".
+        job_type: "Full-time", "Part-time", "Contract".
+        salary: Salary string if available.
+        source: Platform name.
+        apply_url: Direct application URL.
+        posted_at: When the job was posted.
+        applied_at: When the application was submitted.
+        status: "applied", "failed", or "manual_review".
+        application_method: "greenhouse", "lever", "linkedin", "generic", "email".
+        resume_path: Path to tailored resume file.
+        cover_letter_path: Path to cover letter file.
+        matched_keywords: List of matched keywords from the JD.
+        match_score: How well the JD matched the resume (0-1).
+        error_message: Error details if status is "failed".
+        interview_status: "no_response", "phone_screen", "rejected", "offer".
+        notes: Manual notes field.
+        created_at: Record creation timestamp.
+        updated_at: Record update timestamp.
     """
 
-    id: str
     job_id: str
+    title: str
     company: str
-    role: str
-    resume_version: str
-    cover_letter_version: str = ""
-    match_score: Optional[float] = None
-    status: ApplicationStatus = ApplicationStatus.NEW
-    applied_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    job_url: str = ""
+    location: str = ""
+    remote_type: str = "Remote"
+    job_type: str = "Full-time"
+    salary: Optional[str] = None
+    source: str = ""
+    apply_url: str = ""
+    posted_at: Optional[datetime] = None
+    applied_at: Optional[datetime] = None
+    status: str = "applied"
     application_method: str = ""
-    auto_submit_success: Optional[bool] = None
-    auto_submit_error: str = ""
-    confirmation_url: str = ""
+    resume_path: str = ""
+    cover_letter_path: str = ""
+    matched_keywords: list[str] = field(default_factory=list)
+    match_score: float = 0.0
+    error_message: Optional[str] = None
+    interview_status: str = "no_response"
+    notes: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

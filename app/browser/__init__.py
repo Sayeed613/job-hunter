@@ -1,28 +1,29 @@
 """Browser automation for human-like job application submission.
 
-Provides human-like typing, mouse movement, and form-filling via
-Playwright (sync API) for job boards that don't offer public APIs.
+Provides async Playwright-based browser automation with anti-detection,
+human-like typing, form filling, and application routing.
 
 Modules
 -------
-browser_manager:
-    :class:`HumanBehavior` — realistic delays, typing, scrolling.
+manager:
     :class:`BrowserManager` — launches/configures Chromium with
-    anti-detection measures.
-
-linkedin_applier:
-    :class:`LinkedInApplier` — LinkedIn login + Easy Apply flow.
-
-generic_applier:
-    :class:`GenericFormFiller` — fills application forms on any
-    job board (Indeed, Naukri, etc.).
+    anti-detection measures (async).
+human:
+    :class:`Human` — realistic delays, typing, scrolling, screenshots.
+form_filler:
+    :class:`FormFiller` — detects and fills ANY job application form.
+router:
+    :class:`ApplicationRouter` — routes jobs to correct apply strategy.
 """
 
-from app.browser.browser_manager import BrowserManager, HumanBehavior
-from app.browser.generic_applier import GenericFormFiller
+from app.browser.browser_manager import BrowserManager
+from app.browser.human import Human
+from app.browser.form_filler import FormFiller
+from app.browser.router import ApplicationRouter
 
 __all__ = [
+    "ApplicationRouter",
     "BrowserManager",
-    "GenericFormFiller",
-    "HumanBehavior",
+    "FormFiller",
+    "Human",
 ]

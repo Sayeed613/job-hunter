@@ -1,35 +1,17 @@
-# ── Core ─────────────────────────────────────────────────────
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
-python-dotenv>=1.0.0
-
-# ── Firebase ────────────────────────────────────────────────
-firebase-admin>=6.0.0
-
-# ── Document Parsing ──────────────────────────────────────
-python-docx>=1.1.0
-
-# ── HTML Parsing ──────────────────────────────────────────
-beautifulsoup4>=4.15.0
-
-# ── PDF Generation ─────────────────────────────────────────
-fpdf2>=2.8.0
-
-# ── Telegram ────────────────────────────────────────────
-python-telegram-bot>=22.0.0
-
-# ── Scheduler ────────────────────────────────────────────
-apscheduler>=3.11.0
-playwright>=1.52.0
-
-# ── HTTP / Networking ───────────────────────────────────────
-requests>=2.31.0
-tenacity>=8.0.0
-
-# ── Development ─────────────────────────────────────────────
-# pytest       # uncomment when writing tests
-# pytest-cov   # uncomment when measuring coverage
-
-# ── Development ─────────────────────────────────────────────
-# pytest       # uncomment when writing tests
-# pytest-cov   # uncomment when measuring coverage
+pydantic>=2.0
+pydantic-settings>=2.0
+openai>=1.0
+playwright>=1.50
+python-docx>=1.1
+fpdf2>=2.8
+PyPDF2>=3.0
+firebase-admin>=6.0
+python-telegram-bot>=21.0
+APScheduler>=3.10
+tenacity>=8.0
+beautifulsoup4>=4.12
+requests>=2.31
+aiohttp>=3.9
+lxml>=5.0
+structlog>=24.0
+python-dotenv>=1.0

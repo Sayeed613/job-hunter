@@ -1,20 +1,18 @@
-"""Central configuration for Project Headhunter.
+"""Central configuration for the Job Automation Bot.
 
 Loads settings from environment variables with sensible fallback defaults.
+Uses pydantic-settings which automatically reads from .env file.
 """
 
 from __future__ import annotations
+
+from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables.
-
-    Values are sourced automatically from a ``.env`` file (if present) and
-    the process environment.  Every field has a safe default so the
-    application can start without any configuration file.
-    """
+    """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -24,58 +22,42 @@ class Settings(BaseSettings):
     )
 
     # ── Application ──────────────────────────────────────────
-    app_name: str = "Project Headhunter"
+    app_name: str = "Job Automation Bot"
     environment: str = "development"
     log_level: str = "INFO"
     debug: bool = False
 
-    # ── Firebase ─────────────────────────────────────────────
-    firebase_credentials_path: str = ""
-    firebase_database_url: str = ""
-    firebase_project_id: str = ""
-
-    # ── AI / LLM ────────────────────────────────────────────
+    # ── OpenAI / LLM ─────────────────────────────────────────
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
     openai_base_url: str = "https://api.openai.com/v1"
+    openai_temperature: float = 0.7
+    openai_max_tokens: int = 2000
 
-    opencode_api_key: str = ""
-    opencode_model: str = "gpt-4o-mini"
-    opencode_base_url: str = "https://api.openai.com/v1"
-
-    # ── GitHub ────────────────────────────────────────────────
-    github_token: str = ""
-
-    # ── LinkedIn (Browser Automation) ─────────────────────────
-    linkedin_email: str = ""
-    linkedin_password: str = ""
-    linkedin_url: str = ""
-
-    # ── Browser Automation ────────────────────────────────────
-    browser_headless: bool = True
-    browser_timeout_ms: int = 30_000
-
-    # ── Telegram ──────────────────────────────────────────────
+    # ── Telegram ─────────────────────────────────────────────
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
-    # ── Job Applier API Keys ────────────────────────────────────
-    greenhouse_api_key: str = ""
-    lever_api_key: str = ""
-    ashby_api_key: str = ""
+    # ── Firebase ─────────────────────────────────────────────
+    firebase_credentials_path: str = ""
+    firebase_project_id: str = ""
 
-    # ── SMTP (Email Applier) ─────────────────────────────────
-    smtp_host: str = ""
-    smtp_port: int = 587
-    smtp_username: str = ""
-    smtp_password: str = ""
-    smtp_from_email: str = ""
+    # ── LinkedIn (Browser Automation) ────────────────────────
+    linkedin_email: str = ""
+    linkedin_password: str = ""
 
-    # ── Auto-Apply Configuration ─────────────────────────────
-    auto_apply_enabled: bool = True
-    auto_apply_max_per_cycle: int = 5
+    # ── Job Search / Filtering ───────────────────────────────
+    job_keywords: str = "React,Next.js,Python,FastAPI,Node.js,TypeScript,Full-Stack,Backend"
+    locations: str = "Bangalore,Remote India,Remote Global,Hybrid Bangalore"
+    excluded_companies: str = ""
+    min_experience: int = 0
+    max_experience: int = 6
+    run_interval_hours: int = 2
+    max_applications_per_cycle: int = 15
 
-    # ── Job Search / Scraping ────────────────────────────────
-    default_search_location: str = "remote"
-    default_search_radius_km: int = 50
-    job_fetch_interval_minutes: int = 60
+    # ── Browser ──────────────────────────────────────────────
+    headless: bool = True
+    browser_timeout_ms: int = 30_000
+
+    # ── Paths ────────────────────────────────────────────────
+    base_resume_path: str = "resumes/Sayeed_Ahmed_Resume.docx"

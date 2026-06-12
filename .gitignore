@@ -1,17 +1,12 @@
-# ── Virtual environments ──────────────────────────────────────
-.venv/
-venv/
-
-# ── Python byte-code ──────────────────────────────────────────
-__pycache__/
-*.pyc
-
-# ── Environment ───────────────────────────────────────────────
 .env
-
-# ── IDEs & editors ────────────────────────────────────────────
-.idea/
+secrets/
+logs/
+__pycache__/
+venv/
+*.pyc
+resumes/
+/tmp/
 .vscode/
-
-# ── Logs ──────────────────────────────────────────────────────
+.idea/
 *.log
+output/

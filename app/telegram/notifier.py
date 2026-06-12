@@ -1,144 +1,116 @@
-"""Telegram notifier — sends application and status updates."""
+"""Async Telegram notifier — sends detailed application updates and daily summaries.
+
+Uses aiohttp for async HTTP calls instead of blocking on python-telegram-bot's sync API.
+Message templates match spec Section 6 exactly.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from datetime import datetime
 
-from app.config.settings import Settings
+import aiohttp
 
-logger = logging.getLogger("headhunter")
+logger = logging.getLogger("job_automation_bot")
 
-try:
-    from telegram import Bot as TelegramBot
-    from telegram.error import TelegramError
-
-    _HAS_TELEGRAM = True
-except ImportError:
-    _HAS_TELEGRAM = False
-    TelegramBot = None  # type: ignore[assignment]
-    TelegramError = Exception  # type: ignore[assignment]
+_API_BASE = "https://api.telegram.org/bot{token}/{method}"
 
 
-class Notifier:
-    """Sends push notifications to a Telegram chat.
+class TelegramNotifier:
+    """Sends detailed Telegram notifications via async HTTP calls.
 
-    Reads the bot token and target chat ID from :class:`Settings`
-    (``telegram_bot_token``, ``telegram_chat_id``).
-    All send methods are **non-blocking** — errors are logged but
-    not propagated to the caller.
+    Uses the Telegram Bot API directly via aiohttp to avoid blocking the event loop.
     """
 
-    def __init__(
-        self,
-        settings: Settings | None = None,
-        token: str | None = None,
-        chat_id: str | None = None,
-    ) -> None:
-        """Initialise the notifier.
+    def __init__(self, token: str = "", chat_id: str = "") -> None:
+        self._token = token
+        self._chat_id = chat_id
+        self._available = bool(token and chat_id)
 
-        Args:
-            settings: Optional :class:`Settings` instance.
-            token: Override bot token.
-            chat_id: Override target chat ID.
-        """
-        cfg = settings or Settings()
-        self._token = token or cfg.telegram_bot_token or ""
-        self._chat_id = chat_id or cfg.telegram_chat_id or ""
-        self._available = bool(self._token and self._chat_id and _HAS_TELEGRAM)
+        if not self._available:
+            logger.warning("Telegram notifier not configured — notifications disabled")
 
-        if self._available:
-            self._bot = TelegramBot(token=self._token)
-        else:
-            self._bot = None
+    # ── Core async send ──────────────────────────────────────
 
-        if not self._token or not self._chat_id:
-            logger.warning(
-                "Telegram notifier: TELEGRAM_BOT_TOKEN or "
-                "TELEGRAM_CHAT_ID not set — notifications disabled."
-            )
-        elif not _HAS_TELEGRAM:
-            logger.warning(
-                "python-telegram-bot not installed — notifications disabled."
-            )
-
-    # ── Public API ───────────────────────────────────────────
-
-    def send_message(self, text: str) -> bool:
-        """Send a plain-text message to the configured chat.
-
-        Args:
-            text: The message body.
-
-        Returns:
-            ``True`` if the message was sent successfully, ``False``
-            otherwise (or if not configured).
-        """
-        if not self._available or not self._bot:
+    async def send_message(self, text: str) -> bool:
+        """Send a Markdown-formatted message via async HTTP."""
+        if not self._available:
             return False
         try:
-            self._bot.send_message(
-                chat_id=self._chat_id, text=text, parse_mode="Markdown",
-            )
-            logger.info("Telegram message sent", extra={"length": len(text)})
-            return True
-        except TelegramError:
-            logger.exception("Failed to send Telegram message")
+            url = _API_BASE.format(token=self._token, method="sendMessage")
+            payload = {
+                "chat_id": self._chat_id,
+                "text": text,
+                "parse_mode": "Markdown",
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        logger.warning("Telegram API returned %d", resp.status)
+                    return resp.status == 200
+        except Exception:
+            logger.exception("Telegram send failed")
             return False
 
-    def send_application_update(
-        self,
-        company: str,
-        role: str,
-        status: str,
-        match_score: float | None = None,
-        job_url: str = "",
-    ) -> bool:
-        """Send a structured application update notification.
+    # ── Event templates (spec Section 6) ─────────────────────
 
-        Args:
-            company: Company name.
-            role: Job title.
-            status: Application status (e.g. ``NEW``, ``APPLIED``).
-            match_score: Optional ATS / AI match score.
-            job_url: Optional link to the job posting.
-
-        Returns:
-            ``True`` if sent successfully.
-        """
-        score_line = (
-            f"  Score: {match_score:.0%}\n" if match_score is not None else ""
+    async def cycle_started(self, platform_count: int) -> bool:
+        return await self.send_message(
+            f"🔍 *Job search started*\nSearching {platform_count} platforms..."
         )
-        link_line = f"  Link: {job_url}\n" if job_url else ""
 
-        text = (
-            f"📋 *Application Update*\n"
-            f"  Company: {company}\n"
-            f"  Role: {role}\n"
-            f"  Status: {status}\n"
-            f"{score_line}{link_line}"
+    async def jobs_found(self, new_count: int, total: int) -> bool:
+        return await self.send_message(
+            f"📋 *Found {new_count} new jobs*\nFiltered from {total} total. Applying now..."
         )
-        return self.send_message(text)
 
-    def send_collection_summary(
-        self,
-        total_found: int,
-        new_jobs: int,
-        duplicates: int,
-    ) -> bool:
-        """Send a job-collection cycle summary.
-
-        Args:
-            total_found: Number of raw job listings fetched.
-            new_jobs: Number of new jobs saved.
-            duplicates: Number of duplicates skipped.
-
-        Returns:
-            ``True`` if sent successfully.
-        """
-        text = (
-            f"🔄 *Collection Cycle*\n"
-            f"  Found: {total_found}\n"
-            f"  New: {new_jobs}\n"
-            f"  Duplicates: {duplicates}\n"
+    async def job_processing(self, i: int, total: int, title: str, company: str,
+                             location: str, remote_type: str, salary: str,
+                             apply_url: str) -> bool:
+        sal = salary if salary else "Not disclosed"
+        return await self.send_message(
+            f"⚙️ *Processing job {i}/{total}*\n"
+            f"💼 *{title}*\n🏢 {company}\n📍 {location} · {remote_type}\n💰 {sal}\n🔗 {apply_url}"
         )
-        return self.send_message(text)
+
+    async def tailoring(self, matched_count: int, jd_keyword_count: int) -> bool:
+        return await self.send_message(
+            f"✏️ Tailoring resume and cover letter...\nKeywords matched: {matched_count} / {jd_keyword_count}"
+        )
+
+    async def applying(self, method: str) -> bool:
+        return await self.send_message(f"🚀 Applying via {method}...")
+
+    async def success(self, title: str, company: str) -> bool:
+        now = datetime.now().strftime("%H:%M")
+        return await self.send_message(
+            f"✅ *Applied successfully!*\n"
+            f"💼 {title} @ {company}\n🕐 {now}\n📄 Resume: tailored\n📝 Cover letter: generated"
+        )
+
+    async def failure(self, title: str, company: str, error_message: str, apply_url: str) -> bool:
+        return await self.send_message(
+            f"❌ *Application failed*\n"
+            f"💼 {title} @ {company}\nReason: {error_message}\nAction: Saved for manual review → {apply_url}"
+        )
+
+    async def cycle_summary(self, success_count: int, fail_count: int,
+                            skip_count: int, next_run: str) -> bool:
+        return await self.send_message(
+            f"📊 *Cycle Complete*\n"
+            f"✅ Applied: {success_count}\n❌ Failed: {fail_count}\n"
+            f"⏭ Skipped (duplicate): {skip_count}\n⏰ Next run: {next_run}"
+        )
+
+    async def daily_summary(self, date_str: str, total_applications: int,
+                            platforms: list[str], top_roles: list[str],
+                            success_rate: float, all_time_total: int) -> bool:
+        return await self.send_message(
+            f"🗓 *Daily Report — {date_str}*\n"
+            f"Total applications sent: {total_applications}\n"
+            f"Platforms searched: {', '.join(platforms)}\n"
+            f"Roles applied: {', '.join(top_roles[:3])}\n"
+            f"Success rate: {success_rate:.0%}\n"
+            f"Total in database: {all_time_total}\nKeep going 💪"
+        )

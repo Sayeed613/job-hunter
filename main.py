@@ -1,188 +1,150 @@
-"""Application entrypoint for Project Headhunter.
+"""Application entry point for the Job Automation Bot.
 
-Wires all services together and starts the APScheduler-based
-collection & processing cycle.
-
-Usage::
-
+Wires all async services together and starts the scheduler.
+Usage:
     python main.py
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import sys
-import time
 from pathlib import Path
 
-# Ensure the project root is on ``sys.path`` so that ``app`` can be
-# imported regardless of the working directory.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app.config.settings import Settings
-from app.utils.logger import setup_logger
-
-# ── Late imports (may depend on logging being set up first) ──
 
 
-def main() -> None:
-    """Initialise every service and start the recurring scheduler."""
+async def main() -> None:
+    """Initialise all services and start the scheduler."""
     settings = Settings()
-    logger = setup_logger(settings.log_level)
 
-    logger.info(
-        "Project Headhunter starting",
-        extra={
-            "app_name": settings.app_name,
-            "environment": settings.environment,
-            "log_level": settings.log_level,
-        },
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level.upper(), logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    logger = logging.getLogger("job_automation_bot")
 
-    # ── Firebase init (graceful) ────────────────────────────
-    from app.database import (
-        FirestoreRepository,
-        initialize as init_firebase,
-        is_initialized,
-    )
+    logger.info("=" * 50)
+    logger.info("🚀 JOB AUTOMATION BOT STARTING")
+    logger.info("=" * 50)
+
+    # ── Parse resume ────────────────────────────────────────
+    from app.resume.parser import ResumeParser
+
+    resume_path = settings.base_resume_path
+    parser = ResumeParser()
+    resume = parser.parse_docx(resume_path)
+    logger.info("Resume loaded", extra={"candidate": resume.name, "skills": len(resume.skills)})
+
+    # ── Firebase (optional) ─────────────────────────────────
+    from app.database import FirestoreRepository, initialize as init_firebase, is_initialized
 
     init_firebase(settings)
+    repository = FirestoreRepository()
     if is_initialized():
-        repository = FirestoreRepository()
-        logger.info("Firestore repository initialised")
+        logger.info("Firestore initialised")
     else:
-        logger.warning(
-            "Firebase not available — application persistence and "
-            "Telegram bot features will be disabled."
-        )
-        repository = FirestoreRepository()  # will fail at first write
+        logger.warning("Firebase not configured — persistence disabled")
 
-    # ── Load resume ─────────────────────────────────────────
-    from app.resume.service import ResumeService
+    # ── AI Client ───────────────────────────────────────────
+    from app.ai.client import AIClient
 
-    resume_path = Path("Sayeed_Frontend_Developer.docx")
-    if not resume_path.exists():
-        logger.error("Resume file not found at %s — aborting", resume_path.resolve())
-        sys.exit(1)
+    ai_client = AIClient(settings=settings)
+    if not ai_client.is_available:
+        logger.warning("OPENAI_API_KEY not set — AI features disabled")
 
-    resume_service = ResumeService(resume_path)
-    resume = resume_service.load_resume()
-    logger.info(
-        "Resume loaded",
-            extra={
-                "candidate": resume.name,
-                "skills": len(resume.skills),
-                "projects": len(resume.projects),
-            },
-        )
+    # ── Telegram Notifier ────────────────────────────────────
+    from app.telegram.notifier import TelegramNotifier
 
-    # ── AI client ───────────────────────────────────────────
-    from app.ai.opencode_client import OpenCodeClient
-
-    client = OpenCodeClient(settings=settings)
-    if not client._api_key:  # noqa: SLF001
-        logger.warning(
-            "OPENCODE_API_KEY not set — AI matching and cover letter "
-            "generation will fail."
-        )
-
-    # ── Core services ───────────────────────────────────────
-    from app.ai.job_matcher import JobMatcher
-    from app.ai.recommendation_engine import RecommendationEngine
-    from app.ats.ats_scorer import AtsScorer
-    from app.cover_letter.generator import CoverLetterGenerator
-    from app.tailor.resume_generator import ResumeGenerator
-    from app.tailor.resume_tailor import ResumeTailor
-
-    ats_scorer = AtsScorer()
-    job_matcher = JobMatcher(client=client)
-    recommendation_engine = RecommendationEngine()
-    resume_tailor = ResumeTailor()
-    resume_generator = ResumeGenerator()
-    cover_gen = CoverLetterGenerator(client=client)
-
-    # ── Telegram notifier (optional) ────────────────────────
-    from app.telegram.notifier import Notifier
-
-    notifier = Notifier(settings=settings)
-    if not notifier._available:  # noqa: SLF001
-        logger.info("Telegram notifier not available — notifications disabled")
-
-    # ── GitHub service (optional) ───────────────────────────
-    from app.github.github_service import GithubService
-
-    github_service: GithubService | None = None
-    if settings.github_token:
-        github_service = GithubService()
-        logger.info("GitHub service available (token configured)")
-    else:
-        logger.info("No GITHUB_TOKEN set — GitHub analysis disabled")
-
-    # ── Portfolio service (optional) ────────────────────────
-    from app.portfolio.portfolio_service import PortfolioService
-
-    portfolio_service = PortfolioService()
-    # Portfolio requires explicit load_portfolio() call — not loaded here
-
-    # ── Job applier (optional) ───────────────────────────
-    from app.jobs.applier import JobApplier
-
-    job_applier: JobApplier | None = None
-    if settings.auto_apply_enabled:
-        job_applier = JobApplier()
-        logger.info("Job applier initialised (auto-apply enabled)")
-    else:
-        logger.info("Auto-apply disabled by configuration")
-
-    # ── Application pipeline ────────────────────────────────
-    from app.pipeline.application_pipeline import ApplicationPipeline
-
-    pipeline = ApplicationPipeline(
-        ats_scorer=ats_scorer,
-        job_matcher=job_matcher,
-        recommendation_engine=recommendation_engine,
-        resume_tailor=resume_tailor,
-        resume_generator=resume_generator,
-        cover_letter_generator=cover_gen,
-        repository=repository,
-        job_applier=job_applier,
-        github_service=github_service,
-        portfolio_service=portfolio_service,
-        notifier=notifier,
-        output_dir="output",
+    notifier = TelegramNotifier(
+        token=settings.telegram_bot_token,
+        chat_id=settings.telegram_chat_id,
     )
-    logger.info("Application pipeline initialised")
 
-    # ── Job provider ────────────────────────────────────────
-    from app.jobs.providers import RemoteOKProvider
+    # ── Pipeline ─────────────────────────────────────────────
+    from app.pipeline.orchestrator import Pipeline
 
-    remoteok = RemoteOKProvider(timeout=30)
+    pipeline = Pipeline(
+        ai_client=ai_client,
+        repository=repository,
+        notifier=notifier,
+        settings=settings,
+    )
 
-    # ── Scheduler ───────────────────────────────────────────
-    from app.scheduler import Scheduler
+    # ── Job Providers ────────────────────────────────────────
+    providers: list = []
+
+    for mod_name, cls_name in [
+        ("app.jobs.providers.remoteok", "RemoteOKProvider"),
+        ("app.jobs.providers.weworkremotely", "WeWorkRemotelyProvider"),
+        ("app.jobs.providers.linkedin", "LinkedInProvider"),
+        ("app.jobs.providers.indeed", "IndeedProvider"),
+        ("app.jobs.providers.naukri", "NaukriProvider"),
+        ("app.jobs.providers.wellfound", "WellfoundProvider"),
+    ]:
+        try:
+            import importlib
+            mod = importlib.import_module(mod_name)
+            cls = getattr(mod, cls_name)
+            providers.append(cls())
+            logger.info("Loaded provider: %s", cls_name)
+        except Exception as e:
+            logger.warning("Provider %s not available: %s", cls_name, e)
+
+    logger.info("Registered %d job providers", len(providers))
+
+    # ── Schedule ─────────────────────────────────────────────
+    from app.scheduler.scheduler import Scheduler
 
     scheduler = Scheduler(
         pipeline=pipeline,
         resume=resume,
-        providers=[remoteok],
+        providers=providers,
         notifier=notifier,
+        settings=settings,
     )
-    scheduler.start()
 
-    logger.info("=" * 50)
-    logger.info("Scheduler is running — first cycle starting now")
-    logger.info("Cycles run every 30 minutes")
-    logger.info("Press Ctrl+C to stop gracefully")
-    logger.info("=" * 50)
+    # Use asyncio Event for graceful shutdown (works on all platforms)
+    stop_event = asyncio.Event()
 
-    # ── Keep main thread alive ──────────────────────────────
+    def _shutdown() -> None:
+        logger.info("Shutdown requested — stopping...")
+        scheduler.stop()
+        stop_event.set()
+
+    # Register signal handlers where available
     try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("Received SIGINT — shutting down...")
-        scheduler.shut_down(wait=True)
+        loop = asyncio.get_running_loop()
+        if sys.platform != "win32":
+            loop.add_signal_handler(sys.SIGINT, _shutdown)
+            loop.add_signal_handler(sys.SIGTERM, _shutdown)
+        else:
+            # Windows: use KeyboardInterrupt handler instead
+            import signal
+            signal.signal(signal.SIGINT, lambda *_: _shutdown())
+            signal.signal(signal.SIGTERM, lambda *_: _shutdown())
+    except (NotImplementedError, RuntimeError):
+        logger.info("Signal handlers not available — using KeyboardInterrupt fallback")
+
+    # Start the scheduler
+    scheduler.start()
+    await notifier.send_message("🤖 *Bot started!* Running 24/7...")
+
+    # Keep running until shutdown
+    try:
+        await stop_event.wait()
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        pass
+    finally:
+        scheduler.stop()
         logger.info("Goodbye.")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

@@ -1,9 +1,7 @@
 """Telegram notifications and interactive bot commands."""
 
-from app.telegram.bot import Bot
-from app.telegram.notifier import Notifier
+from app.telegram.notifier import TelegramNotifier
 
 __all__ = [
-    "Bot",
-    "Notifier",
+    "TelegramNotifier",
 ]

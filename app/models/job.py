@@ -12,25 +12,41 @@ class Job:
     """Represents a single job posting discovered or processed by the system.
 
     Attributes:
-        id: Unique identifier for the job (e.g. source-specific ID or UUID).
-        title: Job title (e.g. "Senior Backend Engineer").
+        job_id: Unique identifier (sha256 of company+title).
+        title: Job title.
         company: Name of the hiring company.
-        location: Geographic location (e.g. "San Francisco, CA" or "remote").
-        url: Link to the original job posting.
-        description: Full or truncated job description text.
-        source: Platform or source the job was scraped from (e.g. "linkedin",
-            "indeed", "company_careers_page").
-        created_at: Timestamp of when this record was created.
-        match_score: Optional relevance score (0.0 – 1.0) computed by the
-            matching pipeline.  ``None`` until scored.
+        description: Full job description text.
+        location: Geographic location.
+        remote_type: "Remote", "Hybrid", or "Onsite".
+        job_type: "Full-time", "Part-time", "Hourly", "Contract".
+        salary: Salary string (e.g. "$80k-$120k").
+        salary_min: Minimum salary as number.
+        salary_max: Maximum salary as number.
+        currency: Currency code (e.g. "USD", "INR").
+        source: Platform name (e.g. "LinkedIn", "Indeed").
+        apply_url: Direct application URL.
+        posted_at: When the job was posted.
+        skills_required: List of required skills from the JD.
+        experience_years: Required years of experience.
+        raw_html: Raw HTML of the job page (for scraping).
+        scraped_at: When the job was scraped.
     """
 
-    id: str
+    job_id: str
     title: str
     company: str
-    location: str
-    url: str
     description: str
-    source: str
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    match_score: Optional[float] = None
+    location: str = ""
+    remote_type: str = "Remote"
+    job_type: str = "Full-time"
+    salary: Optional[str] = None
+    salary_min: Optional[float] = None
+    salary_max: Optional[float] = None
+    currency: Optional[str] = None
+    source: str = ""
+    apply_url: str = ""
+    posted_at: Optional[datetime] = None
+    skills_required: list[str] = field(default_factory=list)
+    experience_years: Optional[int] = None
+    raw_html: Optional[str] = None
+    scraped_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
