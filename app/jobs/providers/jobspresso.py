@@ -12,6 +12,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from app.jobs.providers.base import BaseJobProvider
 from app.models.job import Job
+from app.utils.http_headers import browser_headers
 
 logger = logging.getLogger("job_automation_bot")
 
@@ -38,7 +39,7 @@ class JobspressoProvider(BaseJobProvider):
                 async with session.get(
                     _JOBSPRESSO_URL,
                     timeout=aiohttp.ClientTimeout(total=30),
-                    headers={"User-Agent": "Mozilla/5.0"},
+                    headers=browser_headers(referer="https://jobspresso.co/"),
                 ) as resp:
                     if resp.status != 200:
                         logger.warning("Jobspresso returned status %d", resp.status)

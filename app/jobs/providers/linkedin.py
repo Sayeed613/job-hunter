@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("job_automation_bot")
 
-_KEYWORDS = ["React", "Python", "Frontend", "Full Stack", "Backend", "Node.js"]
 _LOCATIONS = ["Bangalore", "India", "Remote"]
 
 
@@ -35,6 +34,13 @@ class LinkedInProvider(BaseJobProvider):
 
     def __init__(self) -> None:
         self._browser: Optional[BrowserManager] = None
+        self._keywords = self._load_keywords_from_settings()
+
+    @staticmethod
+    def _load_keywords_from_settings() -> list[str]:
+        from app.config.settings import Settings
+        cfg = Settings()
+        return [k.strip() for k in cfg.job_keywords.split(",") if k.strip()]
 
     @property
     def name(self) -> str:
@@ -51,7 +57,7 @@ class LinkedInProvider(BaseJobProvider):
             return []
 
         try:
-            for kw in _KEYWORDS:
+            for kw in self._keywords:
                 for loc in _LOCATIONS:
                     try:
                         page_jobs = await self._scrape_keyword(kw, loc)

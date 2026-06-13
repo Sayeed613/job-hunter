@@ -1,75 +1,164 @@
-"""Wellfound (AngelList Talent) job provider — fetches startup jobs via public feeds.
+"""Wellfound (AngelList Talent) job provider — fetches startup jobs via browser rendering.
 
-Wellfound's API is not publicly documented. This provider uses the
-public job listing page and atom feed to extract startup jobs.
+Wellfound is fully JavaScript-rendered — HTTP requests return 403 or empty HTML.
+This provider uses the shared Playwright browser to render the page and extract jobs.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
-import re
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Optional
 
 import aiohttp
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.jobs.providers.base import BaseJobProvider
 from app.models.job import Job
+from app.utils.http_headers import browser_headers
+
+if TYPE_CHECKING:
+    from app.browser.browser_manager import BrowserManager
 
 logger = logging.getLogger("job_automation_bot")
 
 
 class WellfoundProvider(BaseJobProvider):
-    """Fetches startup jobs from Wellfound (AngelList Talent) via public feeds."""
+    """Fetches startup jobs from Wellfound using the shared Playwright browser.
+
+    Wellfound is fully JS-rendered — the initial HTTP response contains no job data.
+    This provider uses the shared browser to render JavaScript and extract jobs from
+    the live DOM.
+    """
+
+    def __init__(self) -> None:
+        self._browser: Optional[BrowserManager] = None
 
     @property
     def name(self) -> str:
         return "Wellfound"
 
-    @retry(
-        stop=stop_after_attempt(2),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((aiohttp.ClientError, TimeoutError)),
-        reraise=False,
-    )
+    def set_browser_manager(self, browser_manager: BrowserManager | None) -> None:
+        self._browser = browser_manager
+
     async def fetch_jobs(self) -> list[Job]:
+        # Try HTTP first (some pages may have server-rendered content)
+        jobs = await self._fetch_http()
+        if jobs:
+            logger.info("Wellfound: fetched %d jobs via HTTP", len(jobs))
+            return jobs
+
+        # Fall back to browser for full JS rendering
+        if self._browser and self._browser.is_launched:
+            jobs = await self._fetch_browser()
+            logger.info("Wellfound: fetched %d jobs via browser", len(jobs))
+        else:
+            logger.warning("Wellfound: no browser available — returning 0 jobs")
+
+        return jobs
+
+    async def _fetch_http(self) -> list[Job]:
+        """Try HTTP first — may work for cached/server-rendered content."""
         jobs: list[Job] = []
-
         try:
-            # Strategy: scrape the Wellfound job listing page
-            # Wellfound renders jobs server-side for the initial load
             url = "https://wellfound.com/jobs?remote=true&sort_by=created_at"
-
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     url,
                     timeout=aiohttp.ClientTimeout(total=30),
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/124.0.0.0 Safari/537.36"
-                        ),
-                        "Accept": "text/html,application/xhtml+xml",
-                    },
+                    headers=browser_headers(),
                 ) as resp:
                     if resp.status == 200:
                         html = await resp.text()
                         jobs.extend(self._parse_html(html))
                     else:
-                        logger.warning(
-                            "Wellfound returned status %d — skipping",
-                            resp.status,
-                        )
-
-            logger.info("Wellfound: fetched %d jobs", len(jobs))
+                        logger.info("Wellfound: HTTP returned %d — trying browser", resp.status)
         except Exception:
-            logger.exception("Wellfound fetch failed")
+            logger.debug("Wellfound: HTTP fetch failed — trying browser")
+        return jobs
+
+    async def _fetch_browser(self) -> list[Job]:
+        """Use Playwright browser to render JS and extract jobs from the DOM."""
+        jobs: list[Job] = []
+        if not self._browser:
+            return jobs
+
+        page = await self._browser.new_page()
+        try:
+            url = "https://wellfound.com/jobs?remote=true&sort_by=created_at"
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(5000)
+
+            # Wait for job cards to render
+            try:
+                await page.wait_for_selector(
+                    "[data-testid*='job'], a[href*='/startups/'], .job-card, "
+                    "article, div[class*='JobCard'], div[class*='job-card']",
+                    timeout=15000,
+                )
+            except Exception:
+                logger.warning("Wellfound: no job cards found after scroll — page may need login")
+                return []
+
+            # Scroll to trigger lazy loading
+            for _ in range(5):
+                await page.evaluate("window.scrollBy(0, 800)")
+                await page.wait_for_timeout(1500)
+
+            # Extract jobs from rendered DOM
+            data = await page.evaluate("""() => {
+                const links = document.querySelectorAll('a[href*="/startups/"]');
+                const seen = new Set();
+                return Array.from(links).map(link => {
+                    const href = link.href || '';
+                    if (seen.has(href)) return null;
+                    seen.add(href);
+
+                    // Try to find title and company from parent elements
+                    const card = link.closest('[data-testid*="job"], .job-card, article, li, div[class*="job"], div[class*="Job"]') || link.parentElement;
+                    const text = card ? card.textContent : link.textContent;
+                    const lines = text.split('\\n').map(l => l.trim()).filter(l => l.length > 0);
+
+                    // Heuristic: first non-empty line with >3 chars is likely the title
+                    let title = lines.find(l => l.length > 3 && l.length < 150) || link.textContent.trim();
+                    // Company is often right after the title
+                    const company = lines.find(l => l !== title && l.length > 2 && !l.includes('$') && l !== href) || 'Wellfound Startup';
+
+                    return { title: title.slice(0, 150), url: href, company: company.slice(0, 100) };
+                }).filter(j => j && j.title);
+            }""")
+
+            for item in data:
+                try:
+                    if not item:
+                        continue
+                    job_id = hashlib.sha256(f"wellfound:{item['url']}".encode()).hexdigest()[:16]
+                    jobs.append(Job(
+                        job_id=job_id,
+                        title=item["title"],
+                        company=item.get("company", "Wellfound Startup"),
+                        description="",
+                        location="Remote",
+                        remote_type="Remote",
+                        source="Wellfound",
+                        apply_url=item["url"],
+                        posted_at=datetime.now(timezone.utc),
+                    ))
+                except Exception:
+                    continue
+
+        except Exception as e:
+            logger.warning("Wellfound browser fetch failed: %s", e)
+        finally:
+            await page.close()
+
         return jobs
 
     @staticmethod
     def _parse_html(html: str) -> list[Job]:
         """Parse job listings from the Wellfound HTML page."""
+        import re
+        import json
         jobs: list[Job] = []
 
         # Try to find JSON-LD structured data
@@ -78,8 +167,6 @@ class WellfoundProvider(BaseJobProvider):
             html,
             re.DOTALL,
         )
-        import json
-
         for match in json_ld_matches:
             try:
                 data = json.loads(match.group(1))
@@ -88,99 +175,23 @@ class WellfoundProvider(BaseJobProvider):
                     if isinstance(item, dict) and item.get("@type") == "JobPosting":
                         title = item.get("title", "")
                         company_obj = item.get(
-                            "hiringOrganization",
-                            item.get("directApplicant", {}),
+                            "hiringOrganization", item.get("directApplicant", {}),
                         )
                         company = (
                             company_obj.get("name", "")
-                            if isinstance(company_obj, dict)
-                            else ""
+                            if isinstance(company_obj, dict) else ""
                         )
-                        desc = item.get("description", "") or ""
-                        location = item.get("jobLocation", {}).get("address", {}).get("addressLocality", "")
-                        url = item.get("url", "")
-                        salary = item.get("baseSalary", {}).get("value", {}).get("value", "") if isinstance(item.get("baseSalary"), dict) else ""
-
                         if not title or not company:
                             continue
-
                         job_id = hashlib.sha256(f"wellfound:{company}:{title}".encode()).hexdigest()[:16]
                         jobs.append(Job(
-                            job_id=job_id,
-                            title=title,
-                            company=company,
-                            description=desc[:2000],
-                            location=location or "Remote",
-                            remote_type="Remote",
-                            source="Wellfound",
-                            apply_url=url,
-                            salary=str(salary) if salary else None,
+                            job_id=job_id, title=title, company=company,
+                            description=(item.get("description", "") or "")[:2000],
+                            location=item.get("jobLocation", {}).get("address", {}).get("addressLocality", "") or "Remote",
+                            remote_type="Remote", source="Wellfound",
+                            apply_url=item.get("url", ""),
                         ))
             except Exception:
                 continue
 
-        # Fallback: extract from job card HTML patterns
-        if not jobs:
-            card_pattern = re.compile(
-                r'<a[^>]*href="(/startups/[^"]*/jobs/[^"]*)"[^>]*>'
-                r'\s*<strong[^>]*>(.*?)</strong>'
-                r'\s*</a>',
-                re.DOTALL | re.IGNORECASE,
-            )
-            for link_match in card_pattern.finditer(html):
-                try:
-                    path = link_match.group(1)
-                    title = link_match.group(2).strip()
-                    url = f"https://wellfound.com{path}"
-                    # Company is embedded in the URL path
-                    company_part = path.split("/")[2] if "/" in path else ""
-                    company = company_part.replace("-", " ").title() if company_part else "Startup"
-
-                    if not title:
-                        continue
-
-                    job_id = hashlib.sha256(f"wellfound:{company}:{title}".encode()).hexdigest()[:16]
-                    jobs.append(Job(
-                        job_id=job_id,
-                        title=title,
-                        company=company,
-                        description="",
-                        location="Remote",
-                        remote_type="Remote",
-                        source="Wellfound",
-                        apply_url=url,
-                    ))
-                except Exception:
-                    continue
-
         return jobs
-
-    @staticmethod
-    def _parse_nextjs_item(item: dict) -> Job | None:
-        """Parse a single job item from Wellfound's Next.js data."""
-        try:
-            title = item.get("title", "") or item.get("role", "")
-            company_data = item.get("company", item.get("startup", {}))
-            company = company_data.get("name", "") if isinstance(company_data, dict) else ""
-            desc = item.get("description", item.get("overview", "")) or ""
-            location = item.get("location", "Remote")
-            url = item.get("url", item.get("apply_url", ""))
-            salary = item.get("salary", "")
-
-            if not title or not company:
-                return None
-
-            job_id = hashlib.sha256(f"wellfound:{company}:{title}".encode()).hexdigest()[:16]
-            return Job(
-                job_id=job_id,
-                title=title,
-                company=company,
-                description=desc[:2000],
-                location=location or "Remote",
-                remote_type="Remote",
-                source="Wellfound",
-                apply_url=url,
-                salary=str(salary) if salary else None,
-            )
-        except Exception:
-            return None

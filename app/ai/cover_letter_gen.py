@@ -63,7 +63,8 @@ class CoverLetterGenerator:
             f"from my resume. Show I can do the job.\n"
             f"Para 3 (~60 words): Confident close. State I am excited to contribute, "
             f"available immediately, and invite them to review my portfolio/GitHub.\n"
-            f"Sign off: 'Best regards,\\nSayeed Ahmed\\nsayeedahmed90082@gmail.com\\n+91-9008299613'\n"
+            f"Sign off with:\n"
+            f"Best regards,\nSayeed Ahmed\nsayeedahmed90082@gmail.com\n+91-9008299613\n"
             f"Output ONLY the letter text. No subject line, no markdown."
         )
 

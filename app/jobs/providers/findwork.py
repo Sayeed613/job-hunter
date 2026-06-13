@@ -11,6 +11,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from app.jobs.providers.base import BaseJobProvider
 from app.models.job import Job
+from app.utils.http_headers import api_headers
 
 logger = logging.getLogger("job_automation_bot")
 
@@ -37,10 +38,7 @@ class FindworkProvider(BaseJobProvider):
                 async with session.get(
                     _FINDWORK_API,
                     timeout=aiohttp.ClientTimeout(total=30),
-                    headers={
-                        "User-Agent": "Mozilla/5.0",
-                        "Accept": "application/json",
-                    },
+                    headers=api_headers(referer="https://findwork.dev/"),
                 ) as resp:
                     if resp.status != 200:
                         logger.warning("Findwork returned status %d — API may need auth", resp.status)

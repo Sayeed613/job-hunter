@@ -25,10 +25,11 @@ _PHONE_PATTERN = re.compile(
 _SECTION_HEADERS = re.compile(
     r"^(summary|professional\s*summary|objective|profile|"
     r"skills|technical\s*skills|core\s*competencies|"
-    r"experience|work\s*experience|employment|professional\s*experience|"
+    r"experience|work\s*experience|internship\s*experience|"
+    r"employment|professional\s*experience|"
     r"projects|project[s]?\s*done|key\s*projects|"
     r"education|academic\s*background|"
-    r"certifications|certificates|licenses)",
+    r"certifications|certificates|licenses|additional\s*information)",
     re.IGNORECASE,
 )
 
@@ -66,7 +67,10 @@ class ResumeParser:
             return self._hardcoded_profile()
 
         profile = ResumeProfile()
-        self._extract_contact_info(paragraphs[0], profile)
+        # Search contact info across first 5 paragraphs (email/phone/location are in para 2)
+        contact_text = "\n".join(paragraphs[:5])
+        self._extract_contact_info(contact_text, profile)
+        profile.name = paragraphs[0].strip() or profile.name
         sections = self._split_sections(paragraphs[1:])
 
         profile.summary = self._extract_summary(sections)
@@ -76,6 +80,22 @@ class ResumeParser:
         profile.education = self._extract_education(sections)
         profile.certifications = self._extract_certifications(sections)
 
+        # If the DOCX parsing failed to extract meaningful skills/experience,
+        # fall back to the hardcoded profile values (candidate-specific defaults)
+        hardcoded = self._hardcoded_profile()
+        merged_skills = False
+        if len(profile.skills) < 5 and len(hardcoded.skills) >= 5:
+            profile.skills = hardcoded.skills
+            merged_skills = True
+        if len(profile.experience) == 0 and len(hardcoded.experience) > 0:
+            profile.experience = hardcoded.experience
+        if not profile.summary and hardcoded.summary:
+            profile.summary = hardcoded.summary
+        if len(profile.education) == 0 and len(hardcoded.education) > 0:
+            profile.education = hardcoded.education
+        if len(profile.certifications) == 0 and len(hardcoded.certifications) > 0:
+            profile.certifications = hardcoded.certifications
+
         logger.info(
             "Resume parsed",
             extra={
@@ -83,6 +103,7 @@ class ResumeParser:
                 "candidate": profile.name,
                 "skills": len(profile.skills),
                 "projects": len(profile.projects),
+                "merged_skills": merged_skills,
             },
         )
         return profile
@@ -125,9 +146,9 @@ class ResumeParser:
                 "Built responsive web applications with React and Next.js. "
                 "Integrated REST APIs, implemented state management, and "
                 "optimized performance. Collaborated with designers and backend engineers.",
-                "React Developer Intern | Tech Company | 2022–2023 | "
-                "Developed reusable React components. Worked on feature "
-                "implementation, bug fixes, and code reviews.",
+                "React Developer Intern | TekiArtz | 2024–2025 | "
+                "Built responsive UI components with React, collaborated on frontend "
+                "architecture improvements, and integrated REST APIs.",
             ],
             projects=[
                 Project(
@@ -151,7 +172,7 @@ class ResumeParser:
                 ),
             ],
             education=[
-                "Bachelor of Engineering | Visvesvaraya Technological University | 2022",
+                "Bachelor of Computer Applications (BCA) | Sabarmathi University | 2024",
             ],
             certifications=[
                 "Frontend Development Certification — freeCodeCamp",
@@ -218,7 +239,10 @@ class ResumeParser:
 
     @staticmethod
     def _extract_experience(sections: dict[str, list[str]]) -> list[str]:
-        for key in ("experience", "work_experience", "employment", "professional_experience"):
+        for key in (
+            "experience", "work_experience", "internship_experience",
+            "employment", "professional_experience",
+        ):
             if key in sections:
                 return sections[key]
         return []

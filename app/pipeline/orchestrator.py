@@ -23,6 +23,65 @@ from app.telegram.notifier import TelegramNotifier
 
 logger = logging.getLogger("job_automation_bot")
 
+# ── Tailored text field extractors ──────────────────────────
+_TAILOR_FIELDS = [
+    "Name:", "Email:", "Phone:", "Location:", "Summary:", "Skills:",
+    "Experience:", "Projects:", "Education:", "Certifications:",
+]
+
+# ── Job title keywords to pre-filter relevant roles ─────────
+_RELEVANT_TITLE_KW = [
+    "react", "python", "node", "frontend", "full stack", "fullstack",
+    "backend", "back end", "typescript", "javascript", "developer",
+    "engineer", "software", "web", "next", "api", "fastapi", "django",
+    "vue", "angular", "sde", "swe", "programmer", "tech lead", "staff",
+    "senior", "junior", "fresher", "associate", "full-stack",
+    "front end", "back end", "mern", "mean", "ui", "ux",
+]
+
+
+def _parse_tailored_section(text: str, field: str) -> str:
+    """Extract the value of a single field from tailored resume text."""
+    idx = text.find(field)
+    if idx < 0:
+        return ""
+    start = idx + len(field)
+    rest = text[start:].lstrip()
+    end = len(rest)
+    for other in _TAILOR_FIELDS:
+        if other == field:
+            continue
+        oi = rest.find(other)
+        if 0 <= oi < end:
+            end = oi
+    return rest[:end].strip()
+
+
+def _parse_tailored_list(text: str, field: str) -> list[str]:
+    """Extract a bullet-list section from tailored resume text."""
+    block = _parse_tailored_section(text, field)
+    if not block:
+        return []
+    return [
+        line.strip().lstrip("- ").strip()
+        for line in block.split("\n")
+        if line.strip()
+    ]
+
+
+def _parse_tailored_skills(text: str) -> list[str]:
+    """Extract and parse the Skills section from tailored text."""
+    skills_str = _parse_tailored_section(text, "Skills:")
+    if not skills_str:
+        return []
+    return [s.strip() for s in skills_str.replace(", ", ",").split(",") if s.strip()]
+
+
+def _job_title_matches(title: str) -> bool:
+    """Check if a job title contains any relevant keyword (quick pre-filter)."""
+    t = title.lower()
+    return any(kw in t for kw in _RELEVANT_TITLE_KW)
+
 
 class Pipeline:
     """Main application pipeline — search, tailor, apply, notify."""
@@ -48,27 +107,36 @@ class Pipeline:
     async def run_cycle(self, resume: ResumeProfile, providers: list) -> dict:
         await self._notifier.cycle_started(len(providers))
 
-        # Launch browser early so JS-rendered providers can use it for job fetching
         await self._router.ensure_browser(
             headless=self._settings.headless,
             linkedin_email=self._settings.linkedin_email,
             linkedin_password=self._settings.linkedin_password,
         )
 
-        # Inject the shared browser into providers that need it (Indeed, LinkedIn, Naukri)
         if self._router.is_browser_ready:
             browser = self._router.get_browser()
             for p in providers:
                 if hasattr(p, 'set_browser_manager'):
                     p.set_browser_manager(browser)
 
-        tasks = [provider.fetch_jobs() for provider in providers]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        tasks = [asyncio.create_task(provider.fetch_jobs()) for provider in providers]
+        # Timeout after 120 seconds — slow providers (LinkedIn, etc.) won't block the cycle
+        done, pending = await asyncio.wait(tasks, timeout=120)
+        for task in pending:
+            task.cancel()
 
         all_jobs: list[Job] = []
-        for r in results:
-            if isinstance(r, list):
-                all_jobs.extend(r)
+        for task in done:
+            try:
+                r = task.result()
+                if isinstance(r, list):
+                    all_jobs.extend(r)
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        timed_out = len(pending)
+        if timed_out:
+            logger.info("%d provider(s) timed out after 120s — results so far: %d jobs", timed_out, len(all_jobs))
 
         logger.info("Collected %d total jobs from %d providers", len(all_jobs), len(providers))
         if not all_jobs:
@@ -83,9 +151,37 @@ class Pipeline:
             if not existing:
                 new_jobs.append(job)
 
+        # ── Pre-filter: only keep jobs with relevant titles ──────────
+        relevant_jobs = [j for j in new_jobs if _job_title_matches(j.title)]
+        skipped_due_to_title = len(new_jobs) - len(relevant_jobs)
+        if skipped_due_to_title:
+            logger.info("Title pre-filter: removed %d non-tech jobs, keeping %d", skipped_due_to_title, len(relevant_jobs))
+
+        # ── Sort by relevance: score ALL jobs and take top N ─────────
+        full_resume_text = self._resume_to_text(resume)
+        scored_jobs: list[tuple[float, Job]] = []
+        for job in relevant_jobs:
+            score = self._quick_score(full_resume_text, job.description)
+            # Title match bonus
+            title_lower = job.title.lower()
+            for kw in resume.skills:
+                if kw.lower() in title_lower:
+                    score += 0.05
+            # Short description penalty — less data to match = less reliable
+            word_count = len(job.description.split()) if job.description else 0
+            if word_count < 20:
+                score *= 0.5
+            scored_jobs.append((score, job))
+
+        scored_jobs.sort(key=lambda x: x[0], reverse=True)
+        new_jobs = [job for _, job in scored_jobs]
+
         await self._notifier.jobs_found(len(new_jobs), len(all_jobs))
         if not new_jobs:
-            logger.info("No new jobs to apply to after filtering (%d total, %d passed filter)", len(all_jobs), len(jobs))
+            logger.info(
+                "No relevant jobs after title filter (%d total, %d passed location filter)",
+                len(all_jobs), len(jobs),
+            )
             return {"found": len(all_jobs), "applied": 0, "failed": 0, "skipped": len(all_jobs)}
 
         applied = 0
@@ -101,31 +197,41 @@ class Pipeline:
                     job.apply_url,
                 )
 
-                # Try AI keyword extraction, fall back to quick score if AI fails
+                # ── AI keyword extraction ────────────────────────
+                ai_matched = 0
                 try:
                     keywords = await self._keyword_extractor.extract(job.description)
                     jd_keyword_count = len(keywords.get("hard_skills", []))
-                    matched_count = sum(
+                    ai_matched = sum(
                         1 for s in keywords.get("hard_skills", [])
                         if s.lower() in " ".join(resume.skills).lower()
                     )
-                    await self._notifier.tailoring(matched_count, jd_keyword_count)
+                    await self._notifier.tailoring(ai_matched, jd_keyword_count)
                 except Exception:
                     logger.warning("AI keyword extraction failed — using quick score only")
                     keywords = {"hard_skills": [], "soft_skills": [], "years_required": 0}
                     jd_keyword_count = 0
-                    matched_count = 0
+                    ai_matched = 0
 
-                resume_text = f"{' '.join(resume.skills)}\n{resume.summary}"
-                match_score = self._quick_score(resume_text, job.description)
+                # ── Match score check ────────────────────────────
+                match_score = self._quick_score(full_resume_text, job.description)
 
-                if match_score < 0.10:
-                    logger.info("Low match score %.2f, skipping %s", match_score, job.title)
+                # Accept if AI matched 3+ hard skills, OR quick_score is above threshold
+                if ai_matched < 3 and match_score < 0.05:
+                    logger.info(
+                        "Skipping %s — low score %.2f (AI matched %d/%d skills)",
+                        job.title, match_score, ai_matched, jd_keyword_count,
+                    )
                     skipped += 1
                     continue
 
+                logger.info(
+                    "Matched %s — score: %.2f, AI skills: %d/%d",
+                    job.title, match_score, ai_matched, jd_keyword_count,
+                )
+
+                # ── Resume tailoring ─────────────────────────────
                 base_resume_text = self._resume_to_text(resume)
-                # Only attempt AI tailoring if AI is available
                 if self._ai.is_available:
                     try:
                         tailored_text = await self._resume_tailor.tailor(
@@ -138,42 +244,70 @@ class Pipeline:
                     tailored_text = base_resume_text
 
                 tailored_profile = ResumeProfile(
-                    name=resume.name, email=resume.email, phone=resume.phone,
-                    location=resume.location, summary=resume.summary,
-                    skills=resume.skills, experience=resume.experience,
-                    projects=resume.projects, education=resume.education,
-                    certifications=resume.certifications,
+                    name=_parse_tailored_section(tailored_text, "Name:") or resume.name,
+                    email=_parse_tailored_section(tailored_text, "Email:") or resume.email,
+                    phone=_parse_tailored_section(tailored_text, "Phone:") or resume.phone,
+                    location=_parse_tailored_section(tailored_text, "Location:") or resume.location,
+                    summary=_parse_tailored_section(tailored_text, "Summary:") or resume.summary,
+                    skills=_parse_tailored_skills(tailored_text) or resume.skills,
+                    experience=_parse_tailored_list(tailored_text, "Experience:") or resume.experience,
+                    projects=resume.projects,
+                    education=_parse_tailored_list(tailored_text, "Education:") or resume.education,
+                    certifications=_parse_tailored_list(tailored_text, "Certifications:") or resume.certifications,
                 )
 
+                # ── Generate resume DOCX ────────────────────────
                 job_dir = self._output_dir / _safe_name(job.company)
                 job_dir.mkdir(parents=True, exist_ok=True)
-                resume_docx = self._resume_generator.generate_docx(tailored_profile, job_dir / f"resume_{job.job_id}.docx")
-                resume_pdf = None
+                resume_docx = self._resume_generator.generate_docx(
+                    tailored_profile, job_dir / f"resume_{job.job_id}.docx",
+                )
                 try:
-                    resume_pdf = self._resume_generator.generate_pdf(tailored_profile, job_dir / f"resume_{job.job_id}.pdf")
+                    self._resume_generator.generate_pdf(
+                        tailored_profile, job_dir / f"resume_{job.job_id}.pdf",
+                    )
                 except RuntimeError:
                     pass
                 resume_path = str(resume_docx)
 
-                # Only attempt AI cover letter if AI is available
+                # ── Cover letter ────────────────────────────────
                 if self._ai.is_available:
                     try:
+                        cl_summary = (
+                            _parse_tailored_section(tailored_text, "Summary:")
+                            or resume.summary
+                        )
                         cover_letter_text = await self._cover_letter_gen.generate(
-                            tailored_text[:300],
+                            cl_summary,
                             [f"- {p.description}" for p in resume.projects[:5]],
                             job, keywords.get("hard_skills", []),
                         )
                     except Exception:
-                        logger.warning("AI cover letter generation failed — using template")
-                        cover_letter_text = f"Dear {job.company} Hiring Team,\n\nI am excited to apply for the {job.title} position. With my background in frontend development and a passion for building great user interfaces, I believe I would be a strong addition to your team.\n\nThank you for your consideration.\n\nBest regards,\n{resume.name}"
+                        logger.warning("AI cover letter failed — using template")
+                        cover_letter_text = (
+                            f"Dear {job.company} Hiring Team,\n\n"
+                            f"I am excited to apply for the {job.title} position. "
+                            f"With my background in frontend development and a passion "
+                            f"for building great user interfaces, I believe I would be "
+                            f"a strong addition to your team.\n\n"
+                            f"Thank you for your consideration.\n\n"
+                            f"Best regards,\n{resume.name}"
+                        )
                 else:
-                    cover_letter_text = f"Dear {job.company} Hiring Team,\n\nI am excited to apply for the {job.title} position.\n\nBest regards,\n{resume.name}"
+                    cover_letter_text = (
+                        f"Dear {job.company} Hiring Team,\n\n"
+                        f"I am excited to apply for the {job.title} position.\n\n"
+                        f"Best regards,\n{resume.name}"
+                    )
                 cover_path = job_dir / f"cover_letter_{job.job_id}.docx"
                 self._write_docx(cover_letter_text, cover_path, resume, job.company)
                 cover_letter_path = str(cover_path)
 
+                # ── Submit application ──────────────────────────
                 await self._notifier.applying("browser")
-                success = await self._router.apply(job, resume_path, cover_letter_text, cover_letter_path)
+                success = await self._router.apply(
+                    job, resume_path, cover_letter_text, cover_letter_path,
+                )
 
                 app = Application(
                     job_id=job.job_id, title=job.title, company=job.company,
@@ -193,7 +327,9 @@ class Pipeline:
                     await self._notifier.success(job.title, job.company)
                     applied += 1
                 else:
-                    await self._notifier.failure(job.title, job.company, "Form submission failed", job.apply_url)
+                    await self._notifier.failure(
+                        job.title, job.company, "Form submission failed", job.apply_url,
+                    )
                     failed += 1
 
                 await asyncio.sleep(random.uniform(20, 45))
@@ -205,8 +341,16 @@ class Pipeline:
         await self._router.close_browser()
         next_run = f"{self._settings.run_interval_hours} hours"
         await self._notifier.cycle_summary(applied, failed, skipped, next_run)
-        logger.info("Cycle complete: %d applied, %d failed, %d skipped", applied, failed, skipped)
-        return {"found": len(all_jobs), "applied": applied, "failed": failed, "skipped": skipped + (len(new_jobs) - max_apply)}
+        logger.info(
+            "Cycle complete: %d applied, %d failed, %d skipped",
+            applied, failed, skipped,
+        )
+        return {
+            "found": len(all_jobs),
+            "applied": applied,
+            "failed": failed,
+            "skipped": skipped + (len(new_jobs) - max_apply),
+        }
 
     @staticmethod
     def _deduplicate(jobs: list[Job]) -> list[Job]:
@@ -242,14 +386,12 @@ class Pipeline:
         filtered: list[Job] = []
 
         for job in jobs:
-            # 1. Exclude companies
             if job.company.lower().strip() in excluded:
                 continue
 
             rt = job.remote_type.lower()
             loc = job.location.lower()
 
-            # 2. Location check
             is_remote = (
                 "remote" in rt
                 or rt == ""
@@ -261,17 +403,11 @@ class Pipeline:
             )
             is_bangalore = any(k in loc for k in bangalore_keywords)
 
-            # Accept if:
-            # - It's remote (anywhere in the world), OR
-            # - It's in/around Bangalore (even if onsite, user can commute)
             if not is_remote and not is_bangalore:
-                # Accept hybrid jobs too if they're not Bangalore
                 if "hybrid" not in rt and "hybrid" not in loc:
                     continue
 
-            # 3. Time filter — only jobs posted within the allowed window
             if job.posted_at is not None:
-                # Handle both timezone-aware and naive datetimes
                 posted = job.posted_at
                 if posted.tzinfo is None:
                     posted = posted.replace(tzinfo=timezone.utc)
@@ -279,7 +415,6 @@ class Pipeline:
                 if age > max_age:
                     continue
 
-            # 4. Experience filter
             if job.experience_years is not None:
                 if job.experience_years < self._settings.min_experience:
                     continue
@@ -294,10 +429,6 @@ class Pipeline:
         )
         return filtered
 
-    def _get_locations(self) -> list[str]:
-        raw = self._settings.locations
-        return [loc.strip().lower() for loc in raw.split(",") if loc.strip()]
-
     def _get_excluded_companies(self) -> set[str]:
         raw = self._settings.excluded_companies
         if not raw:
@@ -306,6 +437,7 @@ class Pipeline:
 
     @staticmethod
     def _quick_score(resume_text: str, job_description: str) -> float:
+        """Word-overlap score between full resume text and job description."""
         resume_lower = resume_text.lower()
         jd_lower = job_description.lower()
         resume_words = set(w for w in resume_lower.split() if len(w) > 3)
@@ -317,6 +449,7 @@ class Pipeline:
 
     @staticmethod
     def _resume_to_text(resume: ResumeProfile) -> str:
+        """Full textual representation of the resume for matching."""
         parts = [f"Name: {resume.name}"]
         if resume.summary:
             parts.append(f"Summary: {resume.summary}")
@@ -333,6 +466,9 @@ class Pipeline:
         if resume.education:
             parts.append("Education:")
             parts.extend(resume.education)
+        if resume.certifications:
+            parts.append("Certifications:")
+            parts.extend(resume.certifications)
         return "\n".join(parts)
 
     @staticmethod

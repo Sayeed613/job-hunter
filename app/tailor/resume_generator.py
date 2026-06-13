@@ -1,189 +1,285 @@
-"""Resume generator — produces DOCX and PDF files from tailored profiles."""
+"""Resume document generator — creates styled DOCX and PDF files from a ResumeProfile."""
 
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
+from typing import Optional
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
+from lxml import etree
 
 from app.resume.models import ResumeProfile
 
-try:
-    from fpdf import FPDF
-    _HAS_FPDF = True
-except ImportError:
-    _HAS_FPDF = False
-
-_PDF_FONT = None
-if _HAS_FPDF:
-    for _path in [
-        r"C:\Windows\Fonts\DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    ]:
-        if os.path.exists(_path):
-            _PDF_FONT = _path
-            break
-
 logger = logging.getLogger("job_automation_bot")
 
-_SECTION_HEADING_SIZE = Pt(14)
+# ── Style constants ───────────────────────────────────────────
+_NAME_SIZE = Pt(20)
+_SECTION_SIZE = Pt(14)
 _BODY_SIZE = Pt(11)
-_NAME_SIZE = Pt(22)
-_COLOR_PRIMARY = RGBColor(0x1A, 0x1A, 0x2E)
-_MARGIN_INCHES = 0.75
+_ACCENT_COLOR = RGBColor(0x1A, 0x56, 0xDB)  # Professional blue
+_DARK_COLOR = RGBColor(0x33, 0x33, 0x33)
 
 
 class ResumeGenerator:
-    """Generates formatted DOCX and PDF resume files from a ResumeProfile."""
+    """Generates resume documents (DOCX and PDF) from a ResumeProfile.
+
+    Usage:
+        generator = ResumeGenerator()
+        docx_path = generator.generate_docx(profile, "output/resume.docx")
+        pdf_path = generator.generate_pdf(profile, "output/resume.pdf")
+    """
 
     def __init__(self) -> None:
-        self._has_fpdf = _HAS_FPDF
-        if not self._has_fpdf:
-            logger.warning("fpdf2 not installed — PDF generation will raise RuntimeError")
+        self._has_libreoffice = self._check_libreoffice()
+
+    # ── Public API ───────────────────────────────────────────
 
     def generate_docx(self, profile: ResumeProfile, output_path: str | Path) -> Path:
-        output = Path(output_path)
-        output.parent.mkdir(parents=True, exist_ok=True)
+        """Generate a stylised DOCX resume file.
+
+        Args:
+            profile: The resume data to render.
+            output_path: Filesystem path to write the .docx file.
+
+        Returns:
+            The Path to the generated file.
+        """
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
         doc = Document()
+
+        # -- Page margins --
         for section in doc.sections:
-            section.top_margin = Inches(_MARGIN_INCHES)
-            section.bottom_margin = Inches(_MARGIN_INCHES)
-            section.left_margin = Inches(_MARGIN_INCHES)
-            section.right_margin = Inches(_MARGIN_INCHES)
+            section.top_margin = Inches(0.7)
+            section.bottom_margin = Inches(0.7)
+            section.left_margin = Inches(0.8)
+            section.right_margin = Inches(0.8)
 
-        self._add_header(doc, profile)
-        if profile.summary:
-            self._add_section_heading(doc, "Professional Summary")
-            self._add_body(doc, profile.summary)
-        if profile.skills:
-            self._add_section_heading(doc, "Skills")
-            self._add_body(doc, ", ".join(profile.skills))
-        if profile.experience:
-            self._add_section_heading(doc, "Experience")
-            for entry in profile.experience:
-                self._add_bullet(doc, entry)
-        if profile.projects:
-            self._add_section_heading(doc, "Projects")
-            for project in profile.projects:
-                tech_str = f" — {', '.join(project.technologies)}" if project.technologies else ""
-                self._add_bullet(doc, f"{project.name}{tech_str}")
-                if project.description:
-                    self._add_body(doc, project.description, indent=True)
-        if profile.education:
-            self._add_section_heading(doc, "Education")
-            for entry in profile.education:
-                self._add_bullet(doc, entry)
-        if profile.certifications:
-            self._add_section_heading(doc, "Certifications")
-            for cert in profile.certifications:
-                self._add_bullet(doc, cert)
-
-        doc.save(str(output))
-        logger.info("DOCX generated", extra={"path": str(output)})
-        return output
-
-    def generate_pdf(self, profile: ResumeProfile, output_path: str | Path) -> Path:
-        if not self._has_fpdf:
-            raise RuntimeError("PDF generation requires fpdf2. Install with: pip install fpdf2")
-        output = Path(output_path)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_auto_page_break(auto=True, margin=15)
-        if _PDF_FONT:
-            pdf.add_font("DejaVu", "", _PDF_FONT, uni=True)
-            pdf.add_font("DejaVu", "B", _PDF_FONT, uni=True)
-        _FONT = "DejaVu" if _PDF_FONT else "Helvetica"
-
-        pdf.set_font(_FONT, "B", 20)
-        pdf.cell(0, 10, profile.name, new_x="LMARGIN", new_y="NEXT", align="C")
-        contact_parts = [p for p in [profile.email, profile.phone, profile.location] if p]
-        if contact_parts:
-            pdf.set_font(_FONT, "", 9)
-            pdf.cell(0, 6, "  |  ".join(contact_parts), new_x="LMARGIN", new_y="NEXT", align="C")
-        pdf.ln(4)
-
-        def _write(title: str, lines: list[str]) -> None:
-            pdf.set_font(_FONT, "B", 12)
-            pdf.set_text_color(0x1A, 0x1A, 0x2E)
-            pdf.cell(0, 8, title, new_x="LMARGIN", new_y="NEXT")
-            pdf.set_draw_color(0x1A, 0x1A, 0x2E)
-            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-            pdf.ln(2)
-            pdf.set_font(_FONT, "", 10)
-            pdf.set_text_color(0, 0, 0)
-            for line in lines:
-                pdf.multi_cell(0, 5, f"• {line}")
-                pdf.ln(1)
-
-        if profile.summary:
-            _write("Professional Summary", [profile.summary])
-        if profile.skills:
-            _write("Skills", [", ".join(profile.skills)])
-        if profile.experience:
-            _write("Experience", profile.experience)
-        if profile.projects:
-            p_lines = []
-            for p in profile.projects:
-                line = p.name
-                if p.technologies:
-                    line += f" ({', '.join(p.technologies)})"
-                if p.description:
-                    line += f" — {p.description[:80]}"
-                p_lines.append(line)
-            _write("Projects", p_lines)
-        if profile.education:
-            _write("Education", profile.education)
-        if profile.certifications:
-            _write("Certifications", profile.certifications)
-
-        pdf.output(str(output))
-        logger.info("PDF generated", extra={"path": str(output)})
-        return output
-
-    @staticmethod
-    def _add_header(doc: Document, profile: ResumeProfile) -> None:
+        # -- Name --
         name_para = doc.add_paragraph()
         name_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = name_para.add_run(profile.name)
-        run.bold = True
-        run.font.size = _NAME_SIZE
-        run.font.color.rgb = _COLOR_PRIMARY
-        contact_parts = [p for p in [profile.email, profile.phone, profile.location] if p]
+        name_run = name_para.add_run(profile.name or "Candidate")
+        name_run.bold = True
+        name_run.font.size = _NAME_SIZE
+        name_run.font.color.rgb = _DARK_COLOR
+
+        # -- Contact info --
+        contact_parts = []
+        if profile.email:
+            contact_parts.append(profile.email)
+        if profile.phone:
+            contact_parts.append(profile.phone)
+        if profile.location:
+            contact_parts.append(profile.location)
         if contact_parts:
             contact_para = doc.add_paragraph()
             contact_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = contact_para.add_run("  |  ".join(contact_parts))
-            run.font.size = Pt(9)
-            run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+            contact_run = contact_para.add_run("  |  ".join(contact_parts))
+            contact_run.font.size = Pt(9)
+            contact_run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
+        # -- Divider --
+        self._add_divider(doc)
+
+        # -- Summary --
+        if profile.summary:
+            self._add_section_header(doc, "PROFESSIONAL SUMMARY")
+            summary_para = doc.add_paragraph()
+            summary_run = summary_para.add_run(profile.summary)
+            summary_run.font.size = _BODY_SIZE
+            summary_run.font.color.rgb = _DARK_COLOR
+            summary_para.paragraph_format.space_after = Pt(4)
+
+        # -- Skills --
+        if profile.skills:
+            self._add_section_header(doc, "SKILLS")
+            # Display skills as comma-separated with bullet-like formatting
+            skills_text = ", ".join(profile.skills)
+            skills_para = doc.add_paragraph()
+            skills_run = skills_para.add_run(skills_text)
+            skills_run.font.size = _BODY_SIZE
+            skills_run.font.color.rgb = _DARK_COLOR
+            skills_para.paragraph_format.space_after = Pt(4)
+
+        # -- Experience --
+        if profile.experience:
+            self._add_section_header(doc, "EXPERIENCE")
+            for exp in profile.experience:
+                exp_para = doc.add_paragraph()
+                exp_run = exp_para.add_run(exp)
+                exp_run.font.size = _BODY_SIZE
+                exp_run.font.color.rgb = _DARK_COLOR
+                exp_para.paragraph_format.space_after = Pt(2)
+                exp_para.paragraph_format.left_indent = Inches(0.25)
+
+        # -- Projects --
+        if profile.projects:
+            self._add_section_header(doc, "PROJECTS")
+            for proj in profile.projects:
+                proj_para = doc.add_paragraph()
+                proj_title_run = proj_para.add_run(proj.name)
+                proj_title_run.bold = True
+                proj_title_run.font.size = _BODY_SIZE
+                proj_title_run.font.color.rgb = _ACCENT_COLOR
+                if proj.technologies:
+                    tech_run = proj_para.add_run(
+                        f"  ({', '.join(proj.technologies)})"
+                    )
+                    tech_run.font.size = Pt(9)
+                    tech_run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+                if proj.description:
+                    proj_desc_para = doc.add_paragraph()
+                    proj_desc_run = proj_desc_para.add_run(proj.description)
+                    proj_desc_run.font.size = Pt(10)
+                    proj_desc_run.font.color.rgb = _DARK_COLOR
+                    proj_desc_para.paragraph_format.space_after = Pt(4)
+                    proj_desc_para.paragraph_format.left_indent = Inches(0.25)
+
+        # -- Education --
+        if profile.education:
+            self._add_section_header(doc, "EDUCATION")
+            for edu in profile.education:
+                edu_para = doc.add_paragraph()
+                edu_run = edu_para.add_run(edu)
+                edu_run.font.size = _BODY_SIZE
+                edu_run.font.color.rgb = _DARK_COLOR
+                edu_para.paragraph_format.space_after = Pt(2)
+                edu_para.paragraph_format.left_indent = Inches(0.25)
+
+        # -- Certifications --
+        if profile.certifications:
+            self._add_section_header(doc, "CERTIFICATIONS")
+            for cert in profile.certifications:
+                cert_para = doc.add_paragraph()
+                cert_run = cert_para.add_run(cert)
+                cert_run.font.size = _BODY_SIZE
+                cert_run.font.color.rgb = _DARK_COLOR
+                cert_para.paragraph_format.space_after = Pt(2)
+                cert_para.paragraph_format.left_indent = Inches(0.25)
+
+        doc.save(str(output_path))
+        logger.info("Resume DOCX generated: %s", output_path)
+        return output_path
+
+    def generate_pdf(self, profile: ResumeProfile, output_path: str | Path) -> Optional[Path]:
+        """Generate a PDF version of the resume using LibreOffice headless conversion.
+
+        Falls back to returning None if LibreOffice is not available.
+
+        Args:
+            profile: The resume data to render.
+            output_path: Filesystem path to write the .pdf file.
+
+        Returns:
+            The Path to the generated file, or None if conversion failed.
+        """
+        output_path = Path(output_path)
+        if not self._has_libreoffice:
+            logger.warning("LibreOffice not found — PDF generation disabled")
+            return None
+
+        try:
+            import subprocess
+            import tempfile
+
+            # Generate DOCX first
+            docx_path = output_path.with_suffix(".docx")
+            self.generate_docx(profile, docx_path)
+
+            # Convert to PDF using LibreOffice
+            result = subprocess.run(
+                [
+                    "soffice",
+                    "--headless",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    str(output_path.parent),
+                    str(docx_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            if result.returncode != 0:
+                logger.warning("LibreOffice PDF conversion failed: %s", result.stderr)
+                return None
+
+            if output_path.exists():
+                logger.info("Resume PDF generated: %s", output_path)
+                return output_path
+
+            # LibreOffice may write to a different filename; try to find it
+            generated = output_path.parent / f"{docx_path.stem}.pdf"
+            if generated.exists():
+                generated.rename(output_path)
+                logger.info("Resume PDF generated: %s", output_path)
+                return output_path
+
+            return None
+        except Exception as e:
+            logger.warning("PDF generation failed: %s", e)
+            return None
+
+    # ── Helpers ───────────────────────────────────────────────
 
     @staticmethod
-    def _add_section_heading(doc: Document, title: str) -> None:
-        heading = doc.add_paragraph()
-        run = heading.add_run(title.upper())
+    def _add_section_header(doc: Document, title: str) -> None:
+        """Add a styled section header with bottom border."""
+        para = doc.add_paragraph()
+        run = para.add_run(title.upper())
         run.bold = True
-        run.font.size = _SECTION_HEADING_SIZE
-        run.font.color.rgb = _COLOR_PRIMARY
-        heading.paragraph_format.space_before = Pt(12)
-        heading.paragraph_format.space_after = Pt(4)
+        run.font.size = _SECTION_SIZE
+        run.font.color.rgb = _ACCENT_COLOR
+        para.paragraph_format.space_before = Pt(10)
+        para.paragraph_format.space_after = Pt(4)
+
+        # Add a thin bottom border via paragraph border
+        pf = para.paragraph_format
+        pPr = para._p.get_or_add_pPr()
+        pBdr = pPr.find(qn("w:pBdr"))
+        if pBdr is None:
+            pBdr = etree.SubElement(pPr, qn("w:pBdr"))
+        bottom = pBdr.find(qn("w:bottom"))
+        if bottom is None:
+            bottom = etree.SubElement(pBdr, qn("w:bottom"))
+        bottom.set(qn("w:val"), "single")
+        bottom.set(qn("w:sz"), "4")
+        bottom.set(qn("w:space"), "1")
+        bottom.set(qn("w:color"), "1A56DB")
 
     @staticmethod
-    def _add_body(doc: Document, text: str, indent: bool = False) -> None:
-        para = doc.add_paragraph(text)
-        para.paragraph_format.space_after = Pt(2)
-        if indent:
-            para.paragraph_format.left_indent = Inches(0.25)
-        for run in para.runs:
-            run.font.size = _BODY_SIZE
+    def _add_divider(doc: Document) -> None:
+        """Add a thin horizontal divider line."""
+        para = doc.add_paragraph()
+        pf = para.paragraph_format
+        pf.space_before = Pt(2)
+        pf.space_after = Pt(2)
+        pPr = para._p.get_or_add_pPr()
+        pBdr = etree.SubElement(pPr, qn("w:pBdr"))
+        bottom = etree.SubElement(pBdr, qn("w:bottom"))
+        bottom.set(qn("w:val"), "single")
+        bottom.set(qn("w:sz"), "6")
+        bottom.set(qn("w:space"), "1")
+        bottom.set(qn("w:color"), "CCCCCC")
 
     @staticmethod
-    def _add_bullet(doc: Document, text: str) -> None:
-        para = doc.add_paragraph(text, style="List Bullet")
-        para.paragraph_format.space_after = Pt(1)
-        for run in para.runs:
-            run.font.size = _BODY_SIZE
+    def _check_libreoffice() -> bool:
+        """Check if LibreOffice is installed on the system."""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["soffice", "--headless", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False

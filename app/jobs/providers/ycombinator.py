@@ -12,6 +12,7 @@ import aiohttp
 
 from app.jobs.providers.base import BaseJobProvider
 from app.models.job import Job
+from app.utils.http_headers import browser_headers
 
 if TYPE_CHECKING:
     from app.browser.browser_manager import BrowserManager
@@ -47,7 +48,7 @@ class YCombinatorProvider(BaseJobProvider):
                 async with session.get(
                     f"{_YC_URL}?remote=true",
                     timeout=aiohttp.ClientTimeout(total=30),
-                    headers={"User-Agent": "Mozilla/5.0"},
+                    headers=browser_headers(referer="https://www.workatastartup.com/"),
                 ) as resp:
                     if resp.status == 200:
                         html = await resp.text()

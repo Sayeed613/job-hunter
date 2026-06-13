@@ -50,7 +50,7 @@ class RemoteOKProvider(BaseJobProvider):
 
                     # Parse tags as required skills
                     tags = item.get("tags", [])
-                    skills = [t.get("value", "") for t in tags if isinstance(t, dict)]
+                    skills = [t if isinstance(t, str) else t.get("value", "") for t in tags]
 
                     job = Job(
                         job_id=job_id,

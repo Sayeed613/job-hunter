@@ -112,7 +112,7 @@ class FormFiller:
 
         # Get all interactive elements
         selector = (
-            "input:not([type='hidden']):not([type='submit']):not([type='button']):not([type='image']), "
+            "input:not([type='hidden']):not([type='submit']):not([type='button']):not([type='image']):not([type='file']), "
             "textarea, select"
         )
         inputs = await page.query_selector_all(selector)
@@ -171,12 +171,6 @@ class FormFiller:
         )
         if not selector:
             return  # Cannot target this element — skip
-
-        # ── FILE UPLOAD ──
-        if input_type == "file":
-            if any(w in hint for w in ["resume", "cv", "document"]):
-                await elem.set_input_files(resume_path)
-            return
 
         # ── SELECT / DROPDOWN (smart) ──
         if tag == "select":

@@ -235,7 +235,8 @@ class ApplicationRouter:
             return False
         page = await self._browser.new_page()
         try:
-            await page.goto(job.apply_url, wait_until="networkidle")
+            pre_url = job.apply_url
+            await page.goto(pre_url, wait_until="networkidle")
             await Human.delay(2, 4)
             await Human.scroll(page, "down", 2)
 
@@ -279,8 +280,16 @@ class ApplicationRouter:
                     continue
 
             await Human.delay(3, 5)
-            await Human.screenshot(page, f"generic_{job.job_id}_success")
-            return True
+
+            # Verify success: URL change or success message
+            success = self._confirm_submission(page, pre_url)
+            if success:
+                await Human.screenshot(page, f"generic_{job.job_id}_success")
+                logger.info("Generic: successfully submitted to %s", job.company)
+            else:
+                await Human.screenshot(page, f"generic_{job.job_id}_no_confirm")
+                logger.warning("Generic: no confirmation detected for %s", job.company)
+            return success
         except Exception as e:
             await Human.screenshot(page, f"generic_{job.job_id}_error")
             logger.error("Generic apply failed: %s", e)
@@ -295,7 +304,8 @@ class ApplicationRouter:
             return False
         page = await self._browser.new_page()
         try:
-            await page.goto(job.apply_url, wait_until="networkidle")
+            pre_url = job.apply_url
+            await page.goto(pre_url, wait_until="networkidle")
             await Human.delay(2, 4)
             filler = FormFiller()
             await filler.fill_form(page, resume_path, cover_letter_text)
@@ -312,11 +322,42 @@ class ApplicationRouter:
                     continue
 
             await Human.delay(3, 5)
-            await Human.screenshot(page, f"{label}_{job.job_id}_success")
-            return True
+
+            # Verify success: URL change or success message on page
+            success = self._confirm_submission(page, pre_url)
+            if success:
+                await Human.screenshot(page, f"{label}_{job.job_id}_success")
+                logger.info("%s: successfully submitted application to %s", label, job.company)
+            else:
+                await Human.screenshot(page, f"{label}_{job.job_id}_no_confirm")
+                logger.warning("%s: submit clicked but no confirmation detected for %s", label, job.company)
+            return success
         except Exception as e:
             await Human.screenshot(page, f"{label}_{job.job_id}_error")
             logger.error("%s apply failed: %s", label, e)
             return False
         finally:
             await page.close()
+
+    async def _confirm_submission(self, page, pre_url: str) -> bool:
+        """Check whether the application was submitted successfully.
+
+        Returns True if:
+        - The URL changed from the original apply URL (redirected to confirmation), OR
+        - A success/thank-you message is visible on the page.
+        """
+        post_url = page.url
+        if post_url != pre_url:
+            return True
+        try:
+            el = await page.query_selector(
+                "text=Thank you, text=Application submitted, "
+                "text=Your application has been submitted, "
+                "text=Success, text=Submitted successfully, "
+                "text=Your application was sent, "
+                "[class*='success'], [class*='confirmation'], "
+                "[aria-label*='success'], [role='alert']"
+            )
+            return el is not None
+        except Exception:
+            return False

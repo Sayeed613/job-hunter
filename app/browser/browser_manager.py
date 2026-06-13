@@ -3,23 +3,91 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import Any, Optional
 
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
+from app.config.settings import Settings
+
 logger = logging.getLogger("job_automation_bot")
 
 _STEALTH_SCRIPT = """\
+// ── Essential automation flag removal ──
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+
+// ── Language & locale ──
 Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 4});
+Object.defineProperty(navigator, 'language', {get: () => 'en-US'});
+
+// ── Plugins (real browser has 5) ──
+Object.defineProperty(navigator, 'plugins', {
+  get: () => [
+    {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer'},
+    {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai'},
+    {name: 'Native Client', filename: 'internal-nacl-plugin'},
+  ],
+});
+Object.defineProperty(navigator, 'mimeTypes', {get: () => [1,2,3,4]});
+
+// ── Hardware fingerprinting ──
+Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
+Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
+Object.defineProperty(navigator, 'vendor', {get: () => 'Google Inc.'});
+Object.defineProperty(navigator, 'pdfViewerEnabled', {get: () => false});
+
+// ── Screen / viewport ──
 Object.defineProperty(screen, 'width', {get: () => 1366});
 Object.defineProperty(screen, 'height', {get: () => 768});
-Object.defineProperty(navigator, 'notification', {get: () => 'default'});
-window.chrome = { runtime: {} };
+Object.defineProperty(screen, 'availWidth', {get: () => 1366});
+Object.defineProperty(screen, 'availHeight', {get: () => 728});
+Object.defineProperty(screen, 'colorDepth', {get: () => 24});
+Object.defineProperty(screen, 'pixelDepth', {get: () => 24});
+
+// ── Chrome runtime object (anti-bot check) ──
+window.chrome = {
+  runtime: {},
+  loadTimes: function() { return {}; },
+  csi: function() { return {}; },
+  app: { isInstalled: false, InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' }, RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' } },
+};
+
+// ── Permissions (avoid notification prompt detection) ──
+Object.defineProperty(navigator, 'permissions', {
+  get: () => ({
+    query: async () => ({state: 'granted', onchange: null}),
+  }),
+});
+
+// ── WebGL vendor/renderer spoof (matches Chrome on Windows) ──
+const getParameterProxyHandler = {
+  apply: function(target, thisArg, args) {
+    const param = args[0];
+    if (param === 37445) return 'Intel Inc.';   // UNMASKED_VENDOR_WEBGL
+    if (param === 37446) return 'Intel Iris OpenGL Engine'; // UNMASKED_RENDERER_WEBGL
+    return Reflect.apply(target, thisArg, args);
+  },
+};
+try {
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+  if (gl) {
+    const orig = gl.getParameter.bind(gl);
+    gl.getParameter = new Proxy(orig, getParameterProxyHandler);
+  }
+} catch(e) {}
+
+// ── Connection / network info ──
+Object.defineProperty(navigator, 'connection', {
+  get: () => ({
+    rtt: 100,
+    downlink: 10,
+    effectiveType: '4g',
+    saveData: false,
+    onchange: null,
+  }),
+});
 """
 
 
@@ -41,7 +109,7 @@ class BrowserManager:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._session_path: Path = Path(
-            os.getenv("SESSION_STATE_PATH", "secrets/browser_session.json")
+            Settings().session_state_path
         )
 
     # ── Properties ───────────────────────────────────────────
@@ -156,9 +224,8 @@ class BrowserManager:
     # ── Async context manager ─────────────────────────────────
 
     async def __aenter__(self) -> BrowserManager:
-        await self.launch(
-            headless=os.getenv("HEADLESS", "true").lower() == "true"
-        )
+        cfg = Settings()
+        await self.launch(headless=cfg.headless)
         return self
 
     async def __aexit__(self, *args: Any) -> None:

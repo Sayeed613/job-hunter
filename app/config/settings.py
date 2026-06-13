@@ -60,5 +60,8 @@ class Settings(BaseSettings):
     headless: bool = True
     browser_timeout_ms: int = 30_000
 
+    # ── Browser session ──────────────────────────────────────
+    session_state_path: str = "secrets/browser_session.json"
+
     # ── Paths ────────────────────────────────────────────────
     base_resume_path: str = "Sayeed_Frontend_Developer.docx"
