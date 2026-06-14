@@ -118,6 +118,14 @@ class Pipeline:
             for p in providers:
                 if hasattr(p, 'set_browser_manager'):
                     p.set_browser_manager(browser)
+                    # Log which platforms have saved sessions
+                    if p.requires_login and hasattr(browser, 'session'):
+                        has = browser.session.has_session(p.platform)
+                        if not has:
+                            logger.info(
+                                "%s needs login — run: python main.py --relogin %s",
+                                p.name, p.platform,
+                            )
 
         tasks = [asyncio.create_task(provider.fetch_jobs()) for provider in providers]
         # Timeout after 120 seconds — slow providers (LinkedIn, etc.) won't block the cycle

@@ -24,21 +24,24 @@ CANDIDATE = {
     "full_name": "Sayeed Ahmed",
     "email": "sayeedahmed90082@gmail.com",
     "phone": "+919008299613",
+    "phone_alt": "+91 9008299613",
+    "phone_noplus": "919008299613",
+    "phone_local": "9008299613",
     "location": "Bangalore, Karnataka, India",
     "city": "Bangalore",
     "state": "Karnataka",
     "country": "India",
-    "linkedin": "",
+    "linkedin": "https://www.linkedin.com/in/sayeed-ahmed-613",
     "github": "https://github.com/Sayeed613",
-    "portfolio": "",
+    "portfolio": "https://sayeed613.github.io",
     "years_experience": "1",
     "current_company": "",
     "current_title": "Frontend Developer",
     "notice_period": "Immediate",
-    "willing_to_relocate": "No",
-    "work_authorization": "Yes, I am authorized to work in India",
+    "willing_to_relocate": "No, I am based in Bangalore",
+    "work_authorization": "Yes, I am authorized to work in India. No visa sponsorship required.",
     "salary_expectation": "Negotiable",
-    "referral": "",
+    "referral": "LinkedIn",
     "highest_education": "Bachelor of Computer Applications (BCA)",
     "university": "Sabarmathi University",
     "graduation_year": "2024",
@@ -46,44 +49,78 @@ CANDIDATE = {
     "remote_ok": "Yes",
     "timezone": "IST (UTC+5:30)",
     "languages": "English, Hindi, Kannada",
+    "pronouns": "He/Him",
+    "start_date": "Immediate",
+    "legally_authorized": "Yes",
+    "sponsorship_required": "No",
+    "gender": "",
+    "race": "",
+    "veteran": "",
+    "disability": "",
 }
 
 # ── Semantic field mapping ───────────────────────────────────
+# Maps (field hint keywords) -> CANDIDATE key
 _FIELD_MAP: list[tuple[tuple[str, ...], str]] = [
     (("first", "fname", "firstname", "given"), "first_name"),
     (("last", "lname", "lastname", "surname", "family"), "last_name"),
-    (("full", "your name", "applicant name"), "full_name"),
+    (("full", "your name", "applicant name", "candidate name"), "full_name"),
     (("email", "mail"), "email"),
-    (("phone", "mobile", "tel", "contact number"), "phone"),
+    (("phone", "mobile", "tel", "contact number", "phone number"), "phone"),
     (("city", "current city"), "city"),
-    (("state", "province"), "state"),
+    (("state", "province", "region"), "state"),
     (("country",), "country"),
-    (("address", "location", "where are you"), "location"),
-    (("linkedin",), "linkedin"),
-    (("github", "git"), "github"),
-    (("portfolio", "website", "personal site"), "portfolio"),
-    (("experience", "years of exp", "yrs"), "years_experience"),
+    (("address", "location", "where are you", "current location"), "location"),
+    (("linkedin", "linkedin url", "linkedin profile"), "linkedin"),
+    (("github", "git", "github url"), "github"),
+    (("portfolio", "website", "personal site", "personal website", "url"), "portfolio"),
+    (("experience", "years of exp", "yrs", "years of experience", "total experience"), "years_experience"),
     (("current company", "current employer", "employer"), "current_company"),
-    (("current title", "current role", "designation"), "current_title"),
-    (("notice", "availability", "joining"), "notice_period"),
-    (("salary", "ctc", "compensation", "expected"), "salary_expectation"),
-    (("relocate", "relocation"), "willing_to_relocate"),
-    (("authorization", "authorised", "eligible", "work permit"), "work_authorization"),
-    (("referral", "how did you hear"), "referral"),
+    (("current title", "current role", "designation", "job title"), "current_title"),
+    (("notice", "availability", "joining", "start date", "when can you start"), "start_date"),
+    (("salary", "ctc", "compensation", "expected", "salary expectation", "desired salary"), "salary_expectation"),
+    (("relocate", "relocation", "willing to relocate"), "willing_to_relocate"),
+    (("authorization", "authorised", "eligible", "work permit", "work authorization",
+      "legally authorized", "legally eligible", "right to work"), "work_authorization"),
+    (("sponsor", "visa", "sponsorship", "require visa", "need sponsorship"), "sponsorship_required"),
+    (("referral", "how did you hear", "how did you find", "referral source"), "referral"),
+    (("education", "degree", "highest education", "qualification"), "highest_education"),
+    (("university", "college", "school", "institution"), "university"),
+    (("graduation", "graduated", "grad year", "year of graduation"), "graduation_year"),
+    (("pronoun", "gender pronoun", "preferred pronoun"), "pronouns"),
+    (("language", "languages spoken"), "languages"),
+    (("timezone", "time zone", "current timezone"), "timezone"),
+    (("gender", "sex"), "gender"),
+    (("race", "ethnicity"), "race"),
+    (("veteran", "military", "armed forces"), "veteran"),
+    (("disability", "disabled"), "disability"),
 ]
 
 # ── Dropdown keyword matching ────────────────────────────────
 # Maps candidate field keys to lists of option substrings to prefer.
+# Ordered: more specific matches first to avoid false positives.
 _DROPDOWN_MATCH: dict[str, list[str]] = {
     "country": ["india", "in"],
-    "years_experience": ["0-1", "1", "0 to 1", "fresher", "entry level", "junior", "<1"],
-    "notice_period": ["immediate", "0 day", "0 day notice", "currently serving"],
+    "years_experience": ["1 year", "0-1", "<1", "entry", "junior", "fresher"],
+    "notice_period": ["immediate", "0 day notice", "0 day", "now", "currently serving"],
     "state": ["karnataka", "bangalore"],
     "city": ["bangalore", "bengaluru"],
-    "willing_to_relocate": ["no", "not willing"],
-    "work_authorization": ["yes", "authorized", "authorised", "eligible", "work permit"],
-    "highest_education": ["bachelor", "bca", "b.sc", "b.e", "b.tech", "graduate"],
+    "willing_to_relocate": ["no", "not willing", "i do not", "don't want", "cannot relocate"],
+    "work_authorization": ["yes", "authorized", "authorised", "eligible", "work permit",
+                           "i am authorized", "legally authorized"],
+    "sponsorship_required": ["no", "not required", "don't require", "do not require",
+                              "no sponsorship"],
+    "highest_education": ["bachelor", "bca", "bachelor's", "graduate",
+                           "b.sc", "b.tech", "b.e", "b.com", "b.a"],
     "graduation_year": ["2024", "2023", "2022"],
+    "gender": ["prefer not", "decline", "male", "female"],
+    "race": ["prefer not", "decline", "asian", "other"],
+    "veteran": ["prefer not", "decline", "no", "not a veteran"],
+    "disability": ["prefer not", "decline", "no", "none", "i don't have"],
+    "pronouns": ["he/him", "him", "he", "male"],
+    "languages": ["english", "hindi"],
+    "remote_ok": ["yes", "remote", "fully remote"],
+    "salary_expectation": ["negotiable", "open", "to be discussed", "not specified"],
 }
 
 
@@ -126,17 +163,22 @@ class FormFiller:
                 continue
 
         # Handle file upload inputs separately
-        file_inputs = await page.query_selector_all("input[type='file']")
-        for fi in file_inputs:
-            try:
-                label = await fi.evaluate(
-                    "el => el.closest('label')?.textContent || ''"
-                )
-                if any(w in label.lower() for w in ["resume", "cv", "upload", "document"]):
-                    await fi.set_input_files(resume_path)
-                    await Human.delay(1.0, 2.5)
-            except Exception:
-                continue
+        # Wrapped in try/except because the page/target can close if
+        # the Apply button navigated away or the modal auto-closed.
+        try:
+            file_inputs = await page.query_selector_all("input[type='file']")
+            for fi in file_inputs:
+                try:
+                    label = await fi.evaluate(
+                        "el => el.closest('label')?.textContent || ''"
+                    )
+                    if any(w in label.lower() for w in ["resume", "cv", "upload", "document"]):
+                        await fi.set_input_files(resume_path)
+                        await Human.delay(1.0, 2.5)
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.debug("Could not query file inputs (page may have navigated): %s", e)
 
     async def _fill_element(
         self,
@@ -192,10 +234,12 @@ class FormFiller:
             return
 
         # ── TEXTAREA / COVER LETTER ──
+        # Only fields explicitly marked as "cover letter" get the full CL.
+        # Other textareas (like "Why", "Tell us about yourself") fall through
+        # to _generate_safe_answer for a shorter contextual response.
         if tag == "textarea" or any(
             w in hint
-            for w in ["cover", "letter", "message", "additional", "why", "motivation",
-                       "about yourself", "introduction"]
+            for w in ["cover", "letter", "message", "additional"]
         ):
             await elem.click()
             await asyncio.sleep(random.uniform(0.3, 0.7))
@@ -215,11 +259,46 @@ class FormFiller:
             if not value:
                 continue
             if any(k in hint for k in keys):
+                # For phone inputs: use local number (without +91 prefix) since
+                # the country code is often handled by a separate select dropdown.
+                if field_key == "phone":
+                    local_val = CANDIDATE.get("phone_local")
+                    if local_val:
+                        value = local_val
                 await Human.type_text(page, selector, value)
                 return
 
-        # ── NO FALLBACK — silently skip unknown fields ────────
-        # Do NOT type garbage into unknown fields — it causes form validation failures.
+        # ── TEXTAREA FALLBACK (not a cover letter, still needs filling) ──
+        # Fields like "Why do you want to work here?", "Tell us about yourself"
+        # are textareas that don't match the cover letter keywords.
+        if tag == "textarea":
+            answer = _generate_safe_answer(hint)
+            if answer:
+                await Human.type_text(page, selector, answer)
+                return
+            await Human.type_text(page, selector, "See attached resume for details")
+            return
+
+        # ── UNKNOWN TEXT FIELD — use safe generic response ──
+        # Many forms have custom questions: "Why do you want to work here?",
+        # "What is your experience with X?", "Tell us about yourself", etc.
+        # We never leave them blank — always fill with something safe.
+        if tag == "input" and input_type in ("text", ""):
+            hint_lower = hint.lower()
+            # Generate a safe contextual answer based on the field label
+            answer = _generate_safe_answer(hint_lower)
+            if answer:
+                await Human.type_text(page, selector, answer)
+                return
+            # Absolute last resort: fill with a generic positive statement
+            await Human.type_text(page, selector, "See attached resume for details")
+            return
+
+        # ── ABSOLUTE LAST RESORT (any unfilled input) ──
+        # If we got here, something unusual. Fill with a brief safe value.
+        if tag == "input":
+            await Human.type_text(page, selector, "See resume for details")
+            return
 
     # ── Smart select/dropdown filling ─────────────────────────
 
@@ -248,16 +327,20 @@ class FormFiller:
             preferred = _DROPDOWN_MATCH.get(matched_field, [])
             candidate_val = CANDIDATE.get(matched_field, "").lower()
 
-            # Try candidate value first
-            for opt in options_data:
-                if candidate_val and candidate_val in opt["text"]:
-                    await elem.select_option(opt["value"])
-                    return
-
-            # Try preferred substrings
+            # Try preferred keywords FIRST (most reliable for dropdowns
+            # where candidate values are long sentences but options are short)
             for kw in preferred:
                 for opt in options_data:
                     if kw in opt["text"]:
+                        await elem.select_option(opt["value"])
+                        return
+
+            # Fallback: try matching candidate value against option text.
+            # This naturally filters out long sentences since they won't
+            # appear as substrings in short dropdown options.
+            if candidate_val:
+                for opt in options_data:
+                    if candidate_val in opt["text"]:
                         await elem.select_option(opt["value"])
                         return
 
@@ -313,3 +396,55 @@ class FormFiller:
                 if any(kw in label for kw in ["bachelor", "graduate", "bca", "b.sc"]):
                     await radio.check()
                     return
+
+
+# ── Generate safe answers for unknown form fields ────────────
+
+def _generate_safe_answer(hint: str) -> str | None:
+    """Return a safe, contextual answer for an unknown form field.
+
+    Uses keyword matching against the field's hint text to generate
+    a relevant response. This prevents blank fields on custom questions.
+
+    Args:
+        hint: Lowercased field hint (name + id + placeholder + aria-label).
+
+    Returns:
+        A safe answer string, or None if no match.
+    """
+    # Why / motivation questions
+    if any(w in hint for w in ["why", "motivation", "interest", "passion", "drawn to"]):
+        return "I am excited about this role because it aligns with my skills in frontend development and my passion for building great user experiences."
+
+    # Experience / background questions
+    if any(w in hint for w in ["tell us", "background", "about yourself", "introduce"]):
+        return "I am a frontend developer with 1+ years of experience building web applications with React and Next.js. I enjoy creating responsive, user-friendly interfaces."
+
+    # Skill questions
+    if any(w in hint for w in ["skill", "proficient", "expertise", "technolog"]):
+        return "React, Next.js, TypeScript, JavaScript, Tailwind CSS, Node.js, Python, FastAPI"
+
+    # Project questions
+    if any(w in hint for w in ["project", "portfolio", "work sample"]):
+        return "Built an AI-powered job automation bot, an e-commerce dashboard, and a real-time chat application. Details in my resume."
+
+    # Strength / weakness questions
+    if any(w in hint for w in ["strength", "strong suit"]):
+        return "Building responsive, user-friendly interfaces with modern React and attention to detail."
+    if any(w in hint for w in ["weakness", "improve", "growth"]):
+        return "I am actively deepening my backend knowledge with FastAPI and PostgreSQL to become a more well-rounded full-stack developer."
+
+    # Availability / scheduling
+    if any(w in hint for w in ["available", "interview", "time slot"]):
+        return "Available immediately. Flexible with interview times."
+
+    # Additional info
+    if any(w in hint for w in ["additional", "anything else", "other", "comments"]):
+        return "Please refer to my resume for full details. Thank you for your consideration!"
+
+    # Diversity questions
+    if any(w in hint for w in ["gender", "race", "ethnicity", "veteran", "disability"]):
+        # Return empty string for EEO questions — user should fill these manually if desired
+        return ""
+
+    return None

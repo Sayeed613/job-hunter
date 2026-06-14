@@ -27,11 +27,20 @@ def initialize(settings: Settings) -> None:
         logger.warning("FIREBASE_CREDENTIALS_PATH not set — Firebase disabled")
         return
 
+    # Check that the credentials file actually exists before attempting init
+    import os
+    cred_path = settings.firebase_credentials_path
+    if not os.path.exists(cred_path):
+        logger.warning(
+            "Firebase credentials file not found at %s — Firebase disabled", cred_path
+        )
+        return
+
     try:
         import firebase_admin
         from firebase_admin import credentials
 
-        cred = credentials.Certificate(settings.firebase_credentials_path)
+        cred = credentials.Certificate(cred_path)
         firebase_admin.initialize_app(
             cred,
             options={"projectId": settings.firebase_project_id} if settings.firebase_project_id else None,

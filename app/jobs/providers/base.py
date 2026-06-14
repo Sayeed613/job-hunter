@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from app.models.job import Job
 
@@ -17,12 +17,33 @@ class BaseJobProvider(ABC):
     All providers inherit from this and implement fetch_jobs().
     Providers that use browser-based scraping can receive a shared
     :class:`BrowserManager` instance via :meth:`set_browser_manager`.
+
+    Providers that require login (LinkedIn, Wellfound, etc.) should
+    override :attr:`platform` and :attr:`requires_login` so the
+    pipeline can load the appropriate saved session.
     """
 
     @property
     @abstractmethod
     def name(self) -> str:
         """Human-readable provider name (e.g. 'RemoteOK')."""
+
+    @property
+    def platform(self) -> Optional[str]:
+        """Platform identifier for session management.
+
+        Return the platform name (e.g. "linkedin", "wellfound") if this
+        provider has a dedicated login session. Return None if the
+        platform doesn't require login.
+
+        Used by the pipeline to load the correct storage_state.
+        """
+        return None
+
+    @property
+    def requires_login(self) -> bool:
+        """Whether this provider needs a logged-in browser session."""
+        return self.platform is not None
 
     @abstractmethod
     async def fetch_jobs(self) -> list[Job]:

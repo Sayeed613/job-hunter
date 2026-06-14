@@ -46,6 +46,10 @@ class LinkedInProvider(BaseJobProvider):
     def name(self) -> str:
         return "LinkedIn"
 
+    @property
+    def platform(self) -> str | None:
+        return "linkedin"
+
     def set_browser_manager(self, browser_manager: BrowserManager | None) -> None:
         self._browser = browser_manager
 

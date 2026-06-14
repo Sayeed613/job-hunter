@@ -61,7 +61,13 @@ class Settings(BaseSettings):
     browser_timeout_ms: int = 30_000
 
     # ── Browser session ──────────────────────────────────────
-    session_state_path: str = "secrets/browser_session.json"
+    session_state_path: str = "storage/browser_session.json"
+
+    # ── Per-platform login sessions (storage_state files) ────
+    linkedin_session_path: str = "storage/linkedin_state.json"
+    wellfound_session_path: str = "storage/wellfound_state.json"
+    workatastartup_session_path: str = "storage/workatastartup_state.json"
+    naukri_session_path: str = "storage/naukri_state.json"
 
     # ── Paths ────────────────────────────────────────────────
     base_resume_path: str = "Sayeed_Frontend_Developer.docx"

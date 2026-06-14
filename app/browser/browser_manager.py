@@ -9,6 +9,7 @@ from typing import Any, Optional
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 from app.config.settings import Settings
+from app.browser.session import LoginSession
 
 logger = logging.getLogger("job_automation_bot")
 
@@ -108,9 +109,12 @@ class BrowserManager:
         self._playwright: Any = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
+        self._session: LoginSession = LoginSession()
         self._session_path: Path = Path(
             Settings().session_state_path
         )
+        # Track platform-specific contexts so they can be properly closed
+        self._platform_contexts: dict[str, BrowserContext] = {}
 
     # ── Properties ───────────────────────────────────────────
 
@@ -119,12 +123,23 @@ class BrowserManager:
         """True if the browser context has been created."""
         return self._context is not None
 
+    @property
+    def context(self) -> BrowserContext | None:
+        """The active browser context."""
+        return self._context
+
+    @property
+    def session(self) -> LoginSession:
+        """The login session manager."""
+        return self._session
+
     # ── Lifecycle ────────────────────────────────────────────
 
     async def launch(self, headless: bool = True) -> None:
         """Launch Chromium with anti-detection args and stealth init script.
 
-        Loads a saved session from secrets/browser_session.json if it exists.
+        Creates the shared browser instance. Individual platform contexts
+        should be created via :meth:`new_platform_context` for logged-in access.
 
         Args:
             headless: Run headless (True) or visible (False for debugging).
@@ -143,7 +158,16 @@ class BrowserManager:
             ],
         )
 
-        context_kwargs: dict[str, Any] = {
+        # Create default context
+        context_kwargs: dict[str, Any] = self._base_context_kwargs()
+        self._context = await self._browser.new_context(**context_kwargs)
+        await self._context.add_init_script(_STEALTH_SCRIPT)
+
+        logger.info("Browser launched", extra={"headless": headless})
+
+    def _base_context_kwargs(self) -> dict[str, Any]:
+        """Return base context kwargs with anti-detection settings."""
+        return {
             "user_agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -156,20 +180,73 @@ class BrowserManager:
             "accept_downloads": True,
         }
 
-        # Load saved session if it exists
-        if self._session_path.exists():
-            context_kwargs["storage_state"] = str(self._session_path)
-            logger.info("Loaded saved browser session from %s", self._session_path)
+    async def new_platform_context(self, platform: str) -> BrowserContext:
+        """Create (or reuse) a browser context with the saved session for *platform*.
+
+        If a saved storage_state exists for the platform, it is loaded into
+        the new context so the user appears logged in. Contexts are tracked
+        internally and closed when :meth:`close` is called.
+
+        Args:
+            platform: Platform name ("linkedin", "wellfound", etc.).
+
+        Returns:
+            A BrowserContext with the saved session loaded.
+
+        Raises:
+            RuntimeError: If the browser has not been launched.
+        """
+        if not self._browser:
+            raise RuntimeError("Browser not launched. Call launch() first.")
+
+        # Reuse existing context for this platform if one exists
+        existing = self._platform_contexts.get(platform)
+        if existing is not None:
+            try:
+                # Check if the context is still alive
+                await existing.pages()
+                logger.debug("Reusing existing context for %s", platform)
+                return existing
+            except Exception:
+                # Context died — clean up and create new one
+                del self._platform_contexts[platform]
+
+        context_kwargs = self._base_context_kwargs()
+
+        if self._session.has_session(platform):
+            context_kwargs["storage_state"] = str(self._session.get_path(platform))
+            logger.info("Loaded saved session for %s", platform)
         else:
-            logger.info("No saved session at %s — starting fresh", self._session_path)
+            logger.info("No saved session for %s — starting fresh", platform)
 
-        self._context = await self._browser.new_context(**context_kwargs)
-        await self._context.add_init_script(_STEALTH_SCRIPT)
+        ctx = await self._browser.new_context(**context_kwargs)
+        await ctx.add_init_script(_STEALTH_SCRIPT)
+        self._platform_contexts[platform] = ctx
+        return ctx
 
-        logger.info("Browser launched", extra={"headless": headless})
+    async def save_platform_session(self, context: BrowserContext, platform: str) -> Path:
+        """Save the current context's storage_state as the session for *platform*.
 
-    async def new_page(self) -> Page:
+        Args:
+            context: The browser context (after successful login).
+            platform: Platform name.
+
+        Returns:
+            Path to the saved session file.
+        """
+        state = await context.storage_state()
+        self._session.save_session(platform, state)
+        return self._session.get_path(platform)
+
+    async def new_page(self, platform: str | None = None) -> Page:
         """Create a new page (tab) in the browser context.
+
+        If *platform* is specified, creates a new context with the platform's
+        saved session and returns a page from that context.
+        Otherwise, uses the default shared context.
+
+        Args:
+            platform: Optional platform for logged-in context.
 
         Returns:
             A Playwright Page object.
@@ -177,6 +254,15 @@ class BrowserManager:
         Raises:
             RuntimeError: If the browser has not been launched.
         """
+        if platform:
+            ctx = await self.new_platform_context(platform)
+            page = await ctx.new_page()
+            await page.set_extra_http_headers({
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            })
+            return page
+
         if not self._context:
             raise RuntimeError("Browser not launched. Call launch() first.")
         page = await self._context.new_page()
@@ -187,12 +273,27 @@ class BrowserManager:
         return page
 
     async def close(self) -> None:
-        """Close the browser, save session state, and stop Playwright driver.
+        """Close the browser, save all session states, and stop Playwright driver.
 
-        Refreshes saved cookies/session so they don't expire between runs.
+        Closes all tracked platform contexts first (saving their storage_state
+        if they have a session file), then closes the default context, browser,
+        and Playwright driver.
         """
-        # Save session state before closing
-        if self._context and self._session_path.exists():
+        # Save and close platform-specific contexts
+        for platform, ctx in list(self._platform_contexts.items()):
+            try:
+                # Save session for platforms that have a session file
+                if self._session.has_session(platform):
+                    state = await ctx.storage_state()
+                    self._session.save_session(platform, state)
+                    logger.info("Saved session for %s", platform)
+                await ctx.close()
+            except Exception:
+                logger.debug("Error closing %s context", platform, exc_info=True)
+        self._platform_contexts.clear()
+
+        # Save general session state before closing
+        if self._context:
             try:
                 state = await self._context.storage_state()
                 self._session_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,43 @@
+# Ashby company slugs for startup job boards
+# Each slug corresponds to a company's Ashby board at:
+#   https://api.ashbyhq.com/posting-api/job-board/{slug}
+#
+# To find more: visit a company's careers page. If it redirects to
+# jobs.ashbyhq.com/{slug}, add the slug here.
+
+# ── Y Combinator / Startups using Ashby ──
+ashby
+anthropic
+perplexity
+openai
+replicate
+claude
+elevenlabs
+character
+huggingface
+cohere
+langchain
+weaviate
+chroma
+fixie
+mendable
+pinecone
+supabase
+neon
+planetscale
+railway
+deno
+valtown
+trigger
+inngest
+warp
+readwise
+matter
+reflect
+amplify
+guilded
+notion
+linear
+coda
+fiber
+ashbyhq

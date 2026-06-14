@@ -26,24 +26,32 @@ class Human:
 
     @staticmethod
     async def type_text(page: Page, selector: str, text: str) -> None:
-        """Type *text* character by character with natural pacing.
+        """Type *text* into a field with natural pacing.
 
-        Simulates occasional typos followed by backspace correction.
+        For text longer than 30 chars, uses ``fill()`` (instant) to
+        avoid excessive delays. For short text, types character by
+        character with occasional typos to look human.
         """
         el = await page.wait_for_selector(selector, timeout=8000)
         await el.click()
-        await asyncio.sleep(random.uniform(0.3, 0.7))
+        await asyncio.sleep(random.uniform(0.2, 0.5))
+
+        if len(text) > 30:
+            # Long text: instantly fill (urls, emails, long answers)
+            await el.fill(text)
+            await asyncio.sleep(random.uniform(0.1, 0.3))
+            return
+
+        # Short text: type with natural-looking delays
         for ch in text:
-            # ~4% chance of a typo then correction
-            if random.random() < 0.04:
+            # ~2% chance of a typo then correction
+            if random.random() < 0.02:
                 wrong = random.choice("asdfghjklqwertyuiop")
-                await el.type(wrong)
-                await asyncio.sleep(random.uniform(0.08, 0.18))
+                await el.type(wrong, delay=random.randint(20, 50))
+                await asyncio.sleep(random.uniform(0.03, 0.08))
                 await page.keyboard.press("Backspace")
-                await asyncio.sleep(random.uniform(0.05, 0.12))
-            await el.type(ch, delay=random.randint(45, 160))
-            if ch in " ,.":
-                await asyncio.sleep(random.uniform(0.05, 0.2))
+                await asyncio.sleep(random.uniform(0.02, 0.06))
+            await el.type(ch, delay=random.randint(10, 35))
 
     @staticmethod
     async def click(page: Page, selector: str) -> None:

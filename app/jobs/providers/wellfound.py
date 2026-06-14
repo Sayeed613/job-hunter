@@ -38,6 +38,10 @@ class WellfoundProvider(BaseJobProvider):
     def name(self) -> str:
         return "Wellfound"
 
+    @property
+    def platform(self) -> str | None:
+        return "wellfound"
+
     def set_browser_manager(self, browser_manager: BrowserManager | None) -> None:
         self._browser = browser_manager
 

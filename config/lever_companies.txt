@@ -1,0 +1,48 @@
+# Lever company slugs for startup job boards
+# Each slug corresponds to a company's Lever board at:
+#   https://api.lever.co/v0/postings/{slug}?mode=json
+#
+# To find more: visit a company's careers page. If it redirects to
+# jobs.lever.co/{slug}, add the slug here.
+
+# ── Y Combinator / Startups using Lever ──
+buffer
+gitbook
+transmit
+butterflynetwork
+coda
+notion
+lattice
+calendly
+drift
+intercom
+typeform
+mixpanel
+amplitude
+segment
+hopin
+bunny
+tray
+framer
+dub
+warp
+campsite
+raycast
+readme
+knock
+corbado
+grain
+clerk
+liveblocks
+stytch
+workos
+descope
+process
+builderio
+qwik
+sst
+trigger
+motif
+mintlify
+readai
+visualize
