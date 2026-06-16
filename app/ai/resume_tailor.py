@@ -9,10 +9,10 @@ from app.models.job import Job
 
 logger = logging.getLogger("job_automation_bot")
 
-_TAILOR_SYSTEM_PROMPT = """You are a professional resume writer helping Sayeed Ahmed, a software 
-engineer in Bangalore who has been job hunting for 2 years. He needs every resume to be perfectly 
-tailored to the specific job. Be ruthlessly specific. Do not be generic. Do not add any skills or 
-experience that are NOT already in the base resume."""
+_TAILOR_SYSTEM_PROMPT = """You are a professional resume writer helping Sayeed Ahmed, a frontend 
+developer in Bangalore with 1+ year of experience at Actobiz and a 6-month internship at Tekiarz. 
+He needs every resume to be perfectly tailored to the specific job. Be ruthlessly specific. 
+Do not be generic. Do not add any skills or experience that are NOT already in the base resume."""
 
 
 class ResumeTailor:

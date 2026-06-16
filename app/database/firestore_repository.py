@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optionalhi
 
 from google.api_core.exceptions import GoogleAPICallError, NotFound
 from google.cloud.firestore import Client as FirestoreClient

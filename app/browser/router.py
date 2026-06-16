@@ -330,7 +330,7 @@ class ApplicationRouter:
             await Human.delay(3, 5)
 
             # Verify success: URL change or success message
-            success = self._confirm_submission(page, pre_url)
+            success = await self._confirm_submission(page, pre_url)
             if success:
                 await Human.screenshot(page, f"generic_{job.job_id}_success")
                 logger.info("Generic: successfully submitted to %s", job.company)
@@ -375,30 +375,83 @@ class ApplicationRouter:
                 logger.info("No Apply button on %s — form may already be visible", label)
 
             filler = FormFiller()
-            await filler.fill_form(page, resume_path, cover_letter_text)
-            await Human.delay(1, 2)
 
-            for sel in ["button[type='submit']", "input[type='submit']",
-                        "text=Submit", "text=Submit Application", "text=Send Application"]:
+            # Multi-step form loop — handles Greenhouse/Lever/Ashby/Indeed multi-step forms
+            submitted = False
+            for step in range(8):
+                await Human.delay(1, 2)
+                await filler.fill_form(page, resume_path, cover_letter_text)
+
+                # Upload resume if a file input is present
                 try:
-                    btn = await page.query_selector(sel)
-                    if btn and await btn.is_visible():
-                        await Human.click(page, sel)
-                        break
+                    file_inputs = await page.query_selector_all("input[type='file']")
+                    for fi in file_inputs:
+                        try:
+                            await fi.set_input_files(resume_path)
+                            logger.info("Uploaded resume for %s", label)
+                            await Human.delay(1, 2)
+                        except Exception:
+                            continue
                 except Exception:
-                    continue
+                    pass
 
-            await Human.delay(3, 5)
+                # Check for Submit button first
+                submit_selectors = [
+                    "button[type='submit']", "input[type='submit']",
+                    "button:has-text('Submit')", "button:has-text('Submit Application')",
+                    "button:has-text('Send Application')",
+                    "button:has-text('Complete Application')",
+                ]
+                for sel in submit_selectors:
+                    try:
+                        btn = await page.query_selector(sel)
+                        if btn and await btn.is_visible():
+                            logger.info("%s: found Submit button on step %d", label, step + 1)
+                            await Human.click(page, sel)
+                            await Human.delay(3, 5)
+                            submitted = True
+                            break
+                    except Exception:
+                        continue
+                if submitted:
+                    break
 
-            # Verify success: URL change or success message on page
-            success = self._confirm_submission(page, pre_url)
-            if success:
-                await Human.screenshot(page, f"{label}_{job.job_id}_success")
-                logger.info("%s: successfully submitted application to %s", label, job.company)
+                # Try Next / Continue / Review button
+                next_selectors = [
+                    "button:has-text('Next')", "button:has-text('Continue')",
+                    "button:has-text('Review')",
+                ]
+                found_next = False
+                for sel in next_selectors:
+                    try:
+                        btn = await page.query_selector(sel)
+                        if btn and await btn.is_visible():
+                            logger.info("%s: clicking Next (step %d)", label, step + 1)
+                            await btn.click()
+                            await Human.delay(1, 2)
+                            found_next = True
+                            break
+                    except Exception:
+                        continue
+
+                if not found_next:
+                    logger.info("%s: no Next/Submit at step %d — form may be complete", label, step + 1)
+                    break
+
+            if submitted:
+                # Verify success: URL change or success message on page
+                success = await self._confirm_submission(page, pre_url)
+                if success:
+                    await Human.screenshot(page, f"{label}_{job.job_id}_success")
+                    logger.info("%s: successfully submitted application to %s", label, job.company)
+                else:
+                    await Human.screenshot(page, f"{label}_{job.job_id}_no_confirm")
+                    logger.warning("%s: submit clicked but no confirmation detected for %s", label, job.company)
+                return success
             else:
-                await Human.screenshot(page, f"{label}_{job.job_id}_no_confirm")
-                logger.warning("%s: submit clicked but no confirmation detected for %s", label, job.company)
-            return success
+                logger.warning("%s: reached end of form without submitting for %s", label, job.company)
+                await Human.screenshot(page, f"{label}_{job.job_id}_no_submit")
+                return False
         except Exception as e:
             await Human.screenshot(page, f"{label}_{job.job_id}_error")
             logger.error("%s apply failed: %s", label, e)
@@ -420,14 +473,16 @@ class ApplicationRouter:
         if post_url != pre_url:
             return True
         try:
-            el = await page.query_selector(
-                "text=Thank you, text=Application submitted, "
-                "text=Your application has been submitted, "
-                "text=Success, text=Submitted successfully, "
-                "text=Your application was sent, "
-                "[class*='success'], [class*='confirmation'], "
-                "[aria-label*='success'], [role='alert']"
-            )
-            return el is not None
+            for sel in [
+                "text=Thank you", "text=Application submitted",
+                "text=Your application has been submitted",
+                "text=Successfully applied", "text=Application received",
+                "[class*='success']", "[class*='confirmation']",
+                "[aria-label*='success']", "[role='alert']",
+            ]:
+                el = await page.query_selector(sel)
+                if el and await el.is_visible():
+                    return True
         except Exception:
-            return False
+            pass
+        return False

@@ -117,10 +117,12 @@ class ResumeParser:
             phone="+91-9008299613",
             location="Bangalore, Karnataka, India",
             summary=(
-                "Frontend developer with 1+ years of experience building responsive web "
-                "applications using React, Next.js, and Tailwind CSS. Skilled in creating "
-                "seamless user interfaces and integrating with backend APIs. Proficient in "
-                "TypeScript, JavaScript, and modern web development practices."
+                "Frontend developer with 1+ year of professional experience at Actobiz "
+                "and a 6-month internship at Tekiarz. Skilled in building responsive web "
+                "applications using React, Next.js, TypeScript, and Tailwind CSS. "
+                "Experienced in integrating REST APIs, converting Figma designs to code, "
+                "and optimizing frontend performance. Proficient in modern JavaScript "
+                "(ES6+), Git, and agile development practices."
             ),
             skills=[
                 "React",
@@ -140,15 +142,23 @@ class ResumeParser:
                 "Firebase",
                 "Docker",
                 "AWS",
+                "Figma",
+                "Agile/Jira",
             ],
             experience=[
-                "Frontend Developer | Freelance/Projects | 2023–Present | "
-                "Built responsive web applications with React and Next.js. "
-                "Integrated REST APIs, implemented state management, and "
-                "optimized performance. Collaborated with designers and backend engineers.",
-                "React Developer Intern | TekiArtz | 2024–2025 | "
-                "Built responsive UI components with React, collaborated on frontend "
-                "architecture improvements, and integrated REST APIs.",
+                "Frontend Developer | Actobiz | 2024–2025 (1 year) | "
+                "Built responsive web applications using React, Next.js, and Tailwind CSS. "
+                "Integrated RESTful APIs, implemented state management, and optimized "
+                "performance through lazy loading and code splitting. Collaborated with "
+                "designers to convert Figma mockups into pixel-perfect UIs. "
+                "Worked in an agile environment using Git and Jira.",
+                "Software Engineer Intern | Tekiarz | 2024 (6 months) | "
+                "Developed responsive web pages using HTML5, CSS3, and JavaScript (ES6+). "
+                "Built interactive UI components with React.js. Converted Figma mockups "
+                "to functional web pages. Integrated RESTful APIs using Axios/Fetch. "
+                "Optimized frontend performance with lazy loading, code splitting, and "
+                "image compression. Used Git/GitHub for version control and Jira for "
+                "project management.",
             ],
             projects=[
                 Project(
@@ -170,12 +180,26 @@ class ResumeParser:
                     "authentication and message persistence.",
                     technologies=["React", "Node.js", "WebSocket", "MongoDB"],
                 ),
+                Project(
+                    name="Uber Clone",
+                    description="A React.js application with ride booking flows, "
+                    "real-time driver tracking, and Google Maps API integration.",
+                    technologies=["React", "Google Maps API", "JavaScript"],
+                ),
+                Project(
+                    name="Personal Portfolio",
+                    description="Responsive portfolio site with dark mode, "
+                    "animated sections, and modern UI design.",
+                    technologies=["HTML5", "CSS3", "JavaScript"],
+                ),
             ],
             education=[
-                "Bachelor of Computer Applications (BCA) | Sabarmathi University | 2024",
+                "Bachelor of Computer Applications (BCA) | Sabarmathi University | 2021–2024",
             ],
             certifications=[
                 "Frontend Development Certification — freeCodeCamp",
+                "The Complete JavaScript Course 2024 — Udemy",
+                "React – The Complete Guide — Udemy",
             ],
         )
 

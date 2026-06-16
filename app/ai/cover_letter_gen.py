@@ -9,9 +9,10 @@ from app.models.job import Job
 
 logger = logging.getLogger("job_automation_bot")
 
-_COVER_LETTER_SYSTEM_PROMPT = """You are writing a cover letter for Sayeed Ahmed, a software 
-engineer in Bangalore, India. He is applying for a software engineering role. 
-Write like a real human, not a template. Be specific, not generic. 
+_COVER_LETTER_SYSTEM_PROMPT = """You are writing a cover letter for Sayeed Ahmed, a frontend 
+developer in Bangalore, India with 1+ year of experience at Actobiz (React, Next.js, TypeScript, 
+Tailwind CSS) and a 6-month internship at Tekiarz. He is applying for a frontend/web development 
+role. Write like a real human, not a template. Be specific, not generic. 
 Show genuine interest in the company. Sound confident but not arrogant."""
 
 
