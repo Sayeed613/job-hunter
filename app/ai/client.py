@@ -57,7 +57,39 @@ class AIClient:
 
     @property
     def is_available(self) -> bool:
-        return bool(self._api_key)
+        return bool(self._api_key) and not getattr(self, '_key_invalid', False)
+
+    async def validate(self) -> bool:
+        """Test the API key with a minimal request.
+
+        Call this once at startup to catch invalid keys early,
+        so every subsequent AI call doesn't waste time retrying.
+
+        Returns:
+            True if the key is valid, False otherwise.
+        """
+        if not bool(self._api_key):
+            return False
+        try:
+            await self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "user", "content": "Reply with just OK"}
+                ],
+                max_tokens=10,
+            )
+            logger.info("AI client validated — API key is working")
+            return True
+        except AuthenticationError as e:
+            logger.error(
+                "AI API key rejected (401): %s — disabling AI features. "
+                "Get a free key at https://console.groq.com", e
+            )
+            self._key_invalid = True
+            return False
+        except Exception as e:
+            logger.warning("AI client validation failed: %s — AI features may not work", e)
+            return bool(self._api_key)
 
     # ── Public API ───────────────────────────────────────────
 

@@ -1,0 +1,19 @@
+Requirement already satisfied: twilio in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (9.10.9)
+Requirement already satisfied: requests>=2.0.0 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from twilio) (2.34.0)
+Requirement already satisfied: PyJWT<3.0.0,>=2.0.0 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from twilio) (2.12.1)
+Requirement already satisfied: aiohttp>=3.8.4 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from twilio) (3.13.5)
+Requirement already satisfied: aiohttp-retry>=2.8.3 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from twilio) (2.9.1)
+Requirement already satisfied: aiohappyeyeballs>=2.5.0 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from aiohttp>=3.8.4->twilio) (2.6.1)
+Requirement already satisfied: aiosignal>=1.4.0 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from aiohttp>=3.8.4->twilio) (1.4.0)
+Requirement already satisfied: attrs>=17.3.0 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from aiohttp>=3.8.4->twilio) (26.1.0)
+Requirement already satisfied: frozenlist>=1.1.1 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from aiohttp>=3.8.4->twilio) (1.8.0)
+Requirement already satisfied: multidict<7.0,>=4.5 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from aiohttp>=3.8.4->twilio) (6.7.1)
+Requirement already satisfied: propcache>=0.2.0 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from aiohttp>=3.8.4->twilio) (0.5.2)
+Requirement already satisfied: yarl<2.0,>=1.17.0 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from aiohttp>=3.8.4->twilio) (1.23.0)
+Requirement already satisfied: idna>=2.0 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from yarl<2.0,>=1.17.0->aiohttp>=3.8.4->twilio) (3.14)
+Requirement already satisfied: charset_normalizer<4,>=2 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from requests>=2.0.0->twilio) (3.4.7)
+Requirement already satisfied: urllib3<3,>=1.26 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from requests>=2.0.0->twilio) (2.7.0)
+Requirement already satisfied: certifi>=2023.5.7 in c:\users\sayee\appdata\local\python\pythoncore-3.14-64\lib\site-packages (from requests>=2.0.0->twilio) (2026.4.22)
+
+[notice] A new release of pip is available: 25.3 -> 26.1.2
+[notice] To update, run: C:\Users\sayee\AppData\Local\Python\pythoncore-3.14-64\python.exe -m pip install --upgrade pip

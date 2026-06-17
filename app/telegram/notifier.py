@@ -23,6 +23,8 @@ class TelegramNotifier:
     Uses the Telegram Bot API directly via aiohttp to avoid blocking the event loop.
     """
 
+    NOTIFY_EVENTS = {"applied", "error", "question_needed", "cycle_summary", "daily_summary", "failure"}
+
     def __init__(self, token: str = "", chat_id: str = "") -> None:
         self._token = token
         self._chat_id = chat_id
@@ -62,37 +64,64 @@ class TelegramNotifier:
             logger.exception("Telegram send failed")
             return False
 
+    # ── File upload ───────────────────────────────────────
+
+    async def send_document(self, file_path: str, caption: str = "") -> bool:
+        """Send a file as a Telegram document attachment."""
+        if not self._available:
+            return False
+        from pathlib import Path
+
+        path = Path(file_path)
+        if not path.exists():
+            await self.send_message(
+                f"⚠️ Resume file not found: {file_path}"
+            )
+            return False
+
+        try:
+            url = _API_BASE.format(token=self._token, method="sendDocument")
+            async with aiohttp.ClientSession() as session:
+                with open(path, "rb") as f:
+                    data = aiohttp.FormData()
+                    data.add_field("chat_id", self._chat_id)
+                    data.add_field("document", f, filename=path.name)
+                    if caption:
+                        data.add_field("caption", caption)
+                    async with session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                        if resp.status != 200:
+                            body = await resp.text()
+                            logger.warning("Telegram sendDocument returned %d: %s", resp.status, body[:200])
+                        return resp.status == 200
+        except Exception:
+            logger.exception("Telegram sendDocument failed")
+            return False
+
     # ── Event templates (spec Section 6) ─────────────────────
 
     async def cycle_started(self, platform_count: int) -> bool:
-        return await self.send_message(
-            f"🔍 *Job search started*\nSearching {platform_count} platforms..."
-        )
+        return False
 
     async def jobs_found(self, new_count: int, total: int) -> bool:
-        return await self.send_message(
-            f"📋 *Found {new_count} new jobs*\nFiltered from {total} total. Applying now..."
-        )
+        return False
 
     async def job_processing(self, i: int, total: int, title: str, company: str,
                              location: str, remote_type: str, salary: str,
                              apply_url: str) -> bool:
-        sal = salary if salary else "Not disclosed"
-        return await self.send_message(
-            f"⚙️ *Processing job {i}/{total}*\n"
-            f"💼 *{title}*\n🏢 {company}\n📍 {location} · {remote_type}\n💰 {sal}\n🔗 {apply_url}"
-        )
+        return False
 
     async def tailoring(self, matched_count: int, jd_keyword_count: int) -> bool:
-        return await self.send_message(
-            f"✏️ Tailoring resume and cover letter...\nKeywords matched: {matched_count} / {jd_keyword_count}"
-        )
+        return False
 
     async def applying(self, method: str) -> bool:
-        return await self.send_message(f"🚀 Applying via {method}...")
+        return False
 
-    async def success(self, title: str, company: str) -> bool:
+    async def success(self, title: str, company: str, resume_path: str = "", cover_letter_path: str = "") -> bool:
         now = datetime.now().strftime("%H:%M")
+        if resume_path:
+            await self.send_document(resume_path, caption=f"✅ Applied: {title} @ {company}")
+        if cover_letter_path:
+            await self.send_document(cover_letter_path, caption=f"📝 Cover letter: {title} @ {company}")
         return await self.send_message(
             f"✅ *Applied successfully!*\n"
             f"💼 {title} @ {company}\n🕐 {now}\n📄 Resume: tailored\n📝 Cover letter: generated"

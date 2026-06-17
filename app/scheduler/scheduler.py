@@ -21,7 +21,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.config.settings import Settings
 from app.pipeline.orchestrator import Pipeline
 from app.resume.models import ResumeProfile
-from app.telegram.notifier import TelegramNotifier
+from app.notifier import LocalNotifier
 
 logger = logging.getLogger("job_automation_bot")
 
@@ -33,7 +33,7 @@ class Scheduler:
         pipeline: The async Pipeline orchestrator.
         resume: Parsed ResumeProfile (loaded once at startup).
         providers: List of job provider instances.
-        notifier: TelegramNotifier for notifications.
+        notifier: LocalNotifier for notifications.
         settings: Application settings.
     """
 
@@ -42,7 +42,7 @@ class Scheduler:
         pipeline: Pipeline,
         resume: ResumeProfile,
         providers: list,
-        notifier: TelegramNotifier,
+        notifier: LocalNotifier,
         settings: Settings,
     ) -> None:
         self._pipeline = pipeline
@@ -71,13 +71,18 @@ class Scheduler:
             misfire_grace_time=600,
         )
 
-        # Daily summary at 8:00 AM IST (convert to UTC: 2:30 AM UTC)
+        # Daily summary at 8:00 AM IST
         self._scheduler.add_job(
             self._send_daily_summary,
-            trigger=CronTrigger(hour=2, minute=30, timezone="Asia/Kolkata"),
+            trigger=CronTrigger(hour=8, minute=0, timezone="Asia/Kolkata"),
             id="daily_summary",
             name="Daily application summary",
         )
+        # #region agent log
+        import json as _json, time as _time
+        with open("debug-eeb1f2.log", "a", encoding="utf-8") as _f:
+            _f.write(_json.dumps({"sessionId": "eeb1f2", "hypothesisId": "B", "location": "scheduler.py:start", "message": "daily_summary_cron", "data": {"hour": 8, "minute": 0, "timezone": "Asia/Kolkata", "intended": "8:00 AM IST"}, "timestamp": int(_time.time() * 1000)}) + "\n")
+        # #endregion
 
         # Health check every 10 minutes
         self._scheduler.add_job(

@@ -177,30 +177,31 @@ async def main() -> None:
     resume = parser.parse_docx(resume_path)
     logger.info("Resume loaded", extra={"candidate": resume.name, "skills": len(resume.skills)})
 
-    # ── Firebase (optional) ─────────────────────────────────
-    from app.database import FirestoreRepository, initialize as init_firebase, is_initialized
+    # ── Local storage (applications.json) ────────────────────
+    from app.database import FirestoreRepository
 
-    init_firebase(settings)
     repository = FirestoreRepository()
-    if is_initialized():
-        logger.info("Firestore initialised")
-    else:
-        logger.warning("Firebase not configured — persistence disabled")
 
     # ── AI Client ───────────────────────────────────────────
     from app.ai.client import AIClient
 
     ai_client = AIClient(settings=settings)
-    if not ai_client.is_available:
+
+    # Validate API key immediately so we don't waste time retrying on every AI call
+    if ai_client.is_available:
+        key_valid = await ai_client.validate()
+        if not key_valid:
+            logger.warning(
+                "AI API key is invalid or unreachable — AI features disabled. "
+                "Get a free key at https://console.groq.com"
+            )
+    else:
         logger.warning("OPENAI_API_KEY not set — AI features disabled")
 
-    # ── Telegram Notifier ────────────────────────────────────
-    from app.telegram.notifier import TelegramNotifier
+    # ── WhatsApp Notifier (with local file fallback) ────────
+    from app.notifier import WhatsAppNotifier
 
-    notifier = TelegramNotifier(
-        token=settings.telegram_bot_token,
-        chat_id=settings.telegram_chat_id,
-    )
+    notifier = WhatsAppNotifier()
 
     # ── Pipeline ─────────────────────────────────────────────
     from app.pipeline.orchestrator import Pipeline
@@ -256,6 +257,12 @@ async def main() -> None:
 
     logger.info("Registered %d job providers", len(providers))
 
+    # #region agent log
+    import json as _json, time as _time
+    with open("debug-eeb1f2.log", "a", encoding="utf-8") as _f:
+        _f.write(_json.dumps({"sessionId": "eeb1f2", "hypothesisId": "D", "location": "main.py:main", "message": "startup_providers", "data": {"loaded": len(providers), "expected": 25, "resume": resume.name, "ai_available": ai_client.is_available}, "timestamp": int(_time.time() * 1000)}) + "\n")
+    # #endregion
+
     # ── Schedule ─────────────────────────────────────────────
     from app.scheduler.scheduler import Scheduler
 
@@ -291,7 +298,7 @@ async def main() -> None:
 
     # Start the scheduler
     scheduler.start()
-    await notifier.send_message("🤖 *Bot started!* Running 24/7...")
+    pass  # suppressed startup noise
 
     # Keep running until shutdown
     try:

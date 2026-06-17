@@ -19,7 +19,7 @@ from app.models.application import Application
 from app.models.job import Job
 from app.resume.models import ResumeProfile
 from app.tailor.resume_generator import ResumeGenerator
-from app.telegram.notifier import TelegramNotifier
+from app.notifier import LocalNotifier
 
 logger = logging.getLogger("job_automation_bot")
 
@@ -30,6 +30,7 @@ _TAILOR_FIELDS = [
 ]
 
 # ── Job title keywords to pre-filter relevant roles ─────────
+# Expanded aggressively to catch every possible tech role
 _RELEVANT_TITLE_KW = [
     "react", "python", "node", "frontend", "full stack", "fullstack",
     "backend", "back end", "typescript", "javascript", "developer",
@@ -37,6 +38,16 @@ _RELEVANT_TITLE_KW = [
     "vue", "angular", "sde", "swe", "programmer", "tech lead", "staff",
     "senior", "junior", "fresher", "associate", "full-stack",
     "front end", "back end", "mern", "mean", "ui", "ux",
+    # Expanded keywords — catch more roles aggressively
+    "tech", "coding", "program", "it ", "computer", "saas", "platform",
+    "data", "analyst", "cloud", "devops", "sre", "infrastructure",
+    "mobile", "app", "ios", "android", "flutter", "react native",
+    "wordpress", "shopify", "cms", "automation", "support",
+    "product", "qa", "test", "quality", "tester",
+    "ai", "ml", "machine learning", "deep learning", "llm",
+    "golang", "rust", "java", "spring", "c#", "dotnet",
+    "graphql", "rest", "microservice", "distributed",
+    "entry level", "entry-level", "0-1", "0 to 1",
 ]
 
 
@@ -90,7 +101,7 @@ class Pipeline:
         self,
         ai_client: AIClient,
         repository: FirestoreRepository,
-        notifier: TelegramNotifier,
+        notifier: LocalNotifier,
         settings: Settings,
     ) -> None:
         self._ai = ai_client
@@ -101,17 +112,43 @@ class Pipeline:
         self._resume_tailor = AIResumeTailor(client=ai_client)
         self._cover_letter_gen = AICoverLetterGen(client=ai_client)
         self._resume_generator = ResumeGenerator()
-        self._router = ApplicationRouter()
+        self._router = ApplicationRouter(
+            ai_client=ai_client,
+            notifier=notifier,
+            interaction=None,
+        )
         self._output_dir = Path("output")
 
     async def run_cycle(self, resume: ResumeProfile, providers: list) -> dict:
         await self._notifier.cycle_started(len(providers))
 
-        await self._router.ensure_browser(
-            headless=self._settings.headless,
-            linkedin_email=self._settings.linkedin_email,
-            linkedin_password=self._settings.linkedin_password,
-        )
+        # Reset auto-login attempt tracker so each cycle retries failed logins
+        self._router.reset_login_attempts()
+
+        # #region agent log
+        import json as _json, time as _time
+        with open("debug-eeb1f2.log", "a", encoding="utf-8") as _f:
+            _f.write(_json.dumps({"sessionId": "eeb1f2", "hypothesisId": "A", "location": "orchestrator.py:run_cycle", "message": "ensure_browser_start", "data": {"headless": self._settings.headless, "provider_count": len(providers)}, "timestamp": int(_time.time() * 1000)}) + "\n")
+        # #endregion
+        try:
+            await self._router.ensure_browser(
+                headless=self._settings.headless,
+                linkedin_email=self._settings.linkedin_email,
+                linkedin_password=self._settings.linkedin_password,
+            )
+            # #region agent log
+            with open("debug-eeb1f2.log", "a", encoding="utf-8") as _f:
+                _f.write(_json.dumps({"sessionId": "eeb1f2", "hypothesisId": "A", "location": "orchestrator.py:run_cycle", "message": "ensure_browser_ok", "data": {"browser_ready": self._router.is_browser_ready}, "timestamp": int(_time.time() * 1000)}) + "\n")
+            # #endregion
+        except Exception as _browser_err:
+            # #region agent log
+            with open("debug-eeb1f2.log", "a", encoding="utf-8") as _f:
+                _f.write(_json.dumps({"sessionId": "eeb1f2", "hypothesisId": "E", "location": "orchestrator.py:run_cycle", "message": "ensure_browser_failed", "data": {"error_type": type(_browser_err).__name__, "error": str(_browser_err)[:300]}, "timestamp": int(_time.time() * 1000)}) + "\n")
+            # #endregion
+            logger.warning(
+                "Browser launch failed — continuing with API-only providers: %s",
+                _browser_err,
+            )
 
         if self._router.is_browser_ready:
             browser = self._router.get_browser()
@@ -151,7 +188,12 @@ class Pipeline:
             return {"found": 0, "applied": 0, "failed": 0, "skipped": 0}
 
         jobs = self._deduplicate(all_jobs)
-        jobs = self._filter_jobs(jobs)
+        jobs, _filter_debug = self._filter_jobs(jobs)
+        # #region agent log
+        import json as _json2, time as _time2
+        with open("debug-eeb1f2.log", "a", encoding="utf-8") as _f:
+            _f.write(_json2.dumps({"sessionId": "eeb1f2", "hypothesisId": "C", "location": "orchestrator.py:run_cycle", "message": "filter_stats", "data": {"all_jobs": len(all_jobs), "after_dedup": len(jobs) + _filter_debug.get("filtered_out", 0), "after_filter": len(jobs), **_filter_debug}, "timestamp": int(_time2.time() * 1000)}) + "\n")
+        # #endregion
 
         new_jobs: list[Job] = []
         for job in jobs:
@@ -221,14 +263,18 @@ class Pipeline:
                     jd_keyword_count = 0
                     ai_matched = 0
 
-                # ── Match score check ────────────────────────────
+                # ── Match score check (AGGRESSIVE) ───────────────
                 match_score = self._quick_score(full_resume_text, job.description)
 
-                # Accept if AI matched 3+ hard skills, OR quick_score is above threshold
-                if ai_matched < 3 and match_score < 0.05:
+                # AGGRESSIVE MODE: accept almost anything that passed the title filter
+                # Accept if AI matched 1+ hard skills, OR quick_score is above a very low threshold
+                min_ai = self._settings.min_ai_skills
+                min_score = self._settings.min_match_score
+                if ai_matched < min_ai and match_score < min_score:
                     logger.info(
-                        "Skipping %s — low score %.2f (AI matched %d/%d skills)",
+                        "Skipping %s — score %.2f (AI %d/%d) below thresholds (%d / %.2f)",
                         job.title, match_score, ai_matched, jd_keyword_count,
+                        min_ai, min_score,
                     )
                     skipped += 1
                     continue
@@ -267,18 +313,20 @@ class Pipeline:
                 # ── Generate resume DOCX ────────────────────────
                 job_dir = self._output_dir / _safe_name(job.company)
                 job_dir.mkdir(parents=True, exist_ok=True)
+                safe_company = _safe_name(job.company)
                 resume_docx = self._resume_generator.generate_docx(
-                    tailored_profile, job_dir / f"resume_{job.job_id}.docx",
+                    tailored_profile, job_dir / f"sayeed_ahmed-{safe_company}.docx",
                 )
                 try:
                     self._resume_generator.generate_pdf(
-                        tailored_profile, job_dir / f"resume_{job.job_id}.pdf",
+                        tailored_profile, job_dir / f"sayeed_ahmed-{safe_company}.pdf",
                     )
                 except RuntimeError:
                     pass
                 resume_path = str(resume_docx)
 
                 # ── Cover letter ────────────────────────────────
+                ai_cover_letter = False
                 if self._ai.is_available:
                     try:
                         cl_summary = (
@@ -290,6 +338,7 @@ class Pipeline:
                             [f"- {p.description}" for p in resume.projects[:5]],
                             job, keywords.get("hard_skills", []),
                         )
+                        ai_cover_letter = True
                     except Exception:
                         logger.warning("AI cover letter failed — using template")
                         cover_letter_text = (
@@ -332,7 +381,13 @@ class Pipeline:
                 self._repository.save_application(app)
 
                 if success:
-                    await self._notifier.success(job.title, job.company)
+                    await self._notifier.success(
+                        job.title, job.company,
+                        resume_path=resume_path,
+                        cover_letter_path=cover_letter_path if ai_cover_letter else "",
+                        salary=job.salary or "",
+                        location=job.location,
+                    )
                     applied += 1
                 else:
                     await self._notifier.failure(
@@ -340,7 +395,8 @@ class Pipeline:
                     )
                     failed += 1
 
-                await asyncio.sleep(random.uniform(20, 45))
+                # AGGRESSIVE MODE: shorter delays between applications
+                await asyncio.sleep(random.uniform(12, 25))
             except Exception as e:
                 logger.exception("Failed to process job %s", job.job_id)
                 await self._notifier.failure(job.title, job.company, str(e), job.apply_url)
@@ -353,12 +409,18 @@ class Pipeline:
             "Cycle complete: %d applied, %d failed, %d skipped",
             applied, failed, skipped,
         )
-        return {
+        _result = {
             "found": len(all_jobs),
             "applied": applied,
             "failed": failed,
             "skipped": skipped + (len(new_jobs) - max_apply),
         }
+        # #region agent log
+        import json as _json3, time as _time3
+        with open("debug-eeb1f2.log", "a", encoding="utf-8") as _f:
+            _f.write(_json3.dumps({"sessionId": "eeb1f2", "hypothesisId": "D", "location": "orchestrator.py:run_cycle", "message": "cycle_complete", "data": _result, "timestamp": int(_time3.time() * 1000)}) + "\n")
+        # #endregion
+        return _result
 
     @staticmethod
     def _deduplicate(jobs: list[Job]) -> list[Job]:
@@ -377,7 +439,7 @@ class Pipeline:
             unique.append(job)
         return unique
 
-    def _filter_jobs(self, jobs: list[Job]) -> list[Job]:
+    def _filter_jobs(self, jobs: list[Job]) -> tuple[list[Job], dict]:
         """Filter jobs: remote anywhere in the world + Bangalore onsite/hybrid.
 
         Rules:
@@ -392,6 +454,8 @@ class Pipeline:
         max_age = timedelta(hours=getattr(self._settings, "max_job_age_hours", 48))
         bangalore_keywords = ("bangalore", "bengaluru")
         filtered: list[Job] = []
+        hybrid_non_bangalore_leaked = 0
+        filtered_out = 0
 
         for job in jobs:
             if job.company.lower().strip() in excluded:
@@ -412,8 +476,8 @@ class Pipeline:
             is_bangalore = any(k in loc for k in bangalore_keywords)
 
             if not is_remote and not is_bangalore:
-                if "hybrid" not in rt and "hybrid" not in loc:
-                    continue
+                filtered_out += 1
+                continue
 
             if job.posted_at is not None:
                 posted = job.posted_at
@@ -435,7 +499,10 @@ class Pipeline:
             "Filter: %d jobs in, %d out (remote worldwide + Bangalore)",
             len(jobs), len(filtered),
         )
-        return filtered
+        return filtered, {
+            "filtered_out": filtered_out,
+            "hybrid_non_bangalore_leaked": hybrid_non_bangalore_leaked,
+        }
 
     def _get_excluded_companies(self) -> set[str]:
         raw = self._settings.excluded_companies

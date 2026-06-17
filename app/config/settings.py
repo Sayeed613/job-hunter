@@ -19,6 +19,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         frozen=True,
+        extra="ignore",
     )
 
     # ── Application ──────────────────────────────────────────
@@ -34,13 +35,15 @@ class Settings(BaseSettings):
     openai_temperature: float = 0.7
     openai_max_tokens: int = 2000
 
-    # ── Telegram ─────────────────────────────────────────────
+    # ── Telegram (banned in some regions — optional) ──────────
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
-    # ── Firebase ─────────────────────────────────────────────
-    firebase_credentials_path: str = ""
-    firebase_project_id: str = ""
+    # ── WhatsApp (Twilio) ────────────────────────────────────
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_whatsapp_number: str = ""
+    whatsapp_number: str = ""
 
     # ── LinkedIn (Browser Automation) ────────────────────────
     linkedin_email: str = ""
@@ -53,8 +56,12 @@ class Settings(BaseSettings):
     min_experience: int = 0
     max_experience: int = 6
     run_interval_hours: int = 2
-    max_applications_per_cycle: int = 15
-    max_job_age_hours: int = 48
+    max_applications_per_cycle: int = 30
+    max_job_age_hours: int = 72
+    # Minimum match score to accept a job (lower = more aggressive)
+    min_match_score: float = 0.02
+    # Minimum AI-matched skills to accept a job
+    min_ai_skills: int = 1
 
     # ── Browser ──────────────────────────────────────────────
     headless: bool = True

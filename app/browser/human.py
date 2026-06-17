@@ -73,18 +73,25 @@ class Human:
             await asyncio.sleep(random.uniform(0.3, 0.8))
 
     @staticmethod
-    async def screenshot(page: Page, name: str) -> Path:
+    async def screenshot(page: Page, name: str) -> Path | None:
         """Take a full-page screenshot and save to logs/screenshots/.
+
+        Safe to call even if the page/target has crashed — catches
+        all exceptions and returns None instead of crashing.
 
         Args:
             page: The Playwright page.
             name: Filename (without extension).
 
         Returns:
-            Path to the saved screenshot.
+            Path to the saved screenshot, or None on failure.
         """
         path = Path(f"logs/screenshots/{name}.png")
         path.parent.mkdir(parents=True, exist_ok=True)
-        await page.screenshot(path=str(path), full_page=True)
-        logger.info("Screenshot saved", extra={"path": str(path)})
-        return path
+        try:
+            await page.screenshot(path=str(path), full_page=True)
+            logger.info("Screenshot saved", extra={"path": str(path)})
+            return path
+        except Exception as e:
+            logger.debug("Screenshot failed (page may have closed): %s", e)
+            return None

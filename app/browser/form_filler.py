@@ -15,9 +15,9 @@ from playwright.async_api import ElementHandle, Page
 
 from app.ai.client import AIClient
 from app.browser.human import Human
+from app.notifier import LocalNotifier
 from app.telegram.interaction import TelegramInteraction
 from app.telegram.learner import LearnedProfile
-from app.telegram.notifier import TelegramNotifier
 
 logger = logging.getLogger("job_automation_bot")
 
@@ -37,7 +37,7 @@ CANDIDATE = {
     "country": "India",
     "linkedin": "https://www.linkedin.com/in/sayeed-ahmed-613",
     "github": "https://github.com/Sayeed613",
-    "portfolio": "https://sayeed613.github.io",
+    "portfolio": "https://the-elite-portfolio.onrender.com/",
     "years_experience": "1",
     "years_experience_total": "1.5",
     "current_company": "Actobiz",
@@ -158,7 +158,7 @@ class FormFiller:
     def __init__(
         self,
         ai_client: Optional[AIClient] = None,
-        notifier: Optional[TelegramNotifier] = None,
+        notifier: Optional[LocalNotifier] = None,
         interaction: Optional[TelegramInteraction] = None,
         learner: Optional[LearnedProfile] = None,
     ) -> None:
@@ -211,9 +211,9 @@ class FormFiller:
         # the Apply button navigated away or the modal auto-closed.
         try:
             file_inputs = await page.query_selector_all("input[type='file']")
+            uploaded = False
             for fi in file_inputs:
                 try:
-                    # Check label text, aria-label, id, AND name for keywords
                     fi_info = await fi.evaluate("""el => ({
                         label: el.closest('label')?.textContent?.toLowerCase() || '',
                         ariaLabel: el.getAttribute('aria-label')?.toLowerCase() || '',
@@ -221,13 +221,25 @@ class FormFiller:
                         name: el.getAttribute('name')?.toLowerCase() || ''
                     })""")
                     combined = f"{fi_info['label']} {fi_info['ariaLabel']} {fi_info['id']} {fi_info['name']}"
-                    if any(w in combined for w in ["resume", "cv", "upload", "document"]):
-                        print(f"   [UPLOAD] Found resume file input (id={fi_info['id']}) — uploading {resume_path}")
+                    # Try to match resume by keywords first
+                    if any(w in combined for w in ["resume", "cv", "upload", "document", "file", "attachment"]):
+                        print(f"   [UPLOAD] Uploading resume to file input (id={fi_info['id']}) — {resume_path}")
                         await fi.set_input_files(resume_path)
+                        uploaded = True
                         await Human.delay(1.0, 2.5)
                 except Exception as e:
                     logger.debug("File upload failed: %s", e)
                     continue
+            # If no keyword-matched file input found, upload to the first visible one
+            if not uploaded and file_inputs:
+                try:
+                    first_fi = file_inputs[0]
+                    if await first_fi.is_visible():
+                        print(f"   [UPLOAD] No keyword match — uploading resume to first file input: {resume_path}")
+                        await first_fi.set_input_files(resume_path)
+                        await Human.delay(1.0, 2.5)
+                except Exception as e:
+                    logger.debug("Fallback file upload failed: %s", e)
         except Exception as e:
             logger.debug("Could not query file inputs (page may have navigated): %s", e)
 
@@ -257,11 +269,32 @@ class FormFiller:
 
         # ── COMBOBOX (custom JS dropdown) — check BEFORE selector ──
         # Greenhouse/Lever/Ashby use <input role="combobox"> instead of native <select>.
-        # React comboboxes often have no id/name/placeholder, so we must check
-        # the role BEFORE the selector-based checks below.
+        # Also check for: aria-autocomplete, aria-expanded, data-select, class="select__",
+        # and other common ATS combobox patterns.
         role = (await elem.get_attribute("role") or "").lower()
         aria_haspopup = (await elem.get_attribute("aria-haspopup") or "").lower()
-        if "combobox" in role or "listbox" in aria_haspopup:
+        aria_autocomplete = (await elem.get_attribute("aria-autocomplete") or "").lower()
+        class_attr = (await elem.get_attribute("class") or "").lower()
+        data_attr = await elem.evaluate("""el => {
+            const attrs = el.attributes;
+            for (let a of attrs) {
+                if (a.name.startsWith('data-') && (a.value.includes('select') || a.value.includes('dropdown'))) {
+                    return a.value;
+                }
+            }
+            return '';
+        }""") or ""
+        is_combobox = (
+            "combobox" in role
+            or "listbox" in aria_haspopup
+            or "list" in aria_autocomplete
+            or "select__" in class_attr
+            or "select-" in class_attr
+            or "dropdown" in class_attr
+            or "select" in data_attr
+            or "dropdown" in data_attr
+        )
+        if is_combobox:
             await self._fill_combobox(page, elem, hint)
             return
 
@@ -273,7 +306,9 @@ class FormFiller:
             else None
         )
         if not selector:
-            return  # Cannot target this element — skip
+            # JS fallback: fill the element directly via evaluate
+            await self._fill_via_js(page, elem, hint, tag, input_type, cover_letter_text)
+            return
 
         # ── SELECT / DROPDOWN (smart) ──
         if tag == "select":
@@ -354,6 +389,78 @@ class FormFiller:
         # If we got here, something unusual. Fill with a brief safe value.
         if tag == "input":
             await Human.type_text(page, selector, "See resume for details")
+            return
+
+    # ── JS fallback for fields with no CSS selector ──────────
+
+    async def _fill_via_js(
+        self,
+        page: Page,
+        elem: ElementHandle,
+        hint: str,
+        tag: str,
+        input_type: str,
+        cover_letter_text: str,
+    ) -> None:
+        """Fill a form element directly via JS evaluate or Playwright fill.
+
+        Used when the element has no id, name, or placeholder to build
+        a CSS selector. Uses Playwright's native fill() which properly
+        triggers React synthetic events. Falls back to JS evaluate only
+        when fill() fails.
+        """
+        import json
+
+        async def _js_fill(el: ElementHandle, val: str) -> None:
+            """Fallback: set value via JS evaluate + dispatch events."""
+            try:
+                safe_val = json.dumps(val)
+                await el.evaluate(f"el => el.value = {safe_val}")
+                await el.evaluate("el => el.dispatchEvent(new Event('input', { bubbles: true }))")
+                await el.evaluate("el => el.dispatchEvent(new Event('change', { bubbles: true }))")
+            except Exception:
+                pass
+
+        async def _fill(el: ElementHandle, val: str) -> None:
+            """Try Playwright native fill first (triggers React events), fallback to JS."""
+            try:
+                await el.fill(val)
+            except Exception:
+                await _js_fill(el, val)
+
+        # ── SELECT via JS ──
+        if tag == "select":
+            await self._fill_select(elem, hint)
+            return
+
+        # ── TEXTAREA / COVER LETTER ──
+        if tag == "textarea" or any(w in hint for w in ["cover", "letter", "message", "additional"]):
+            await _fill(elem, cover_letter_text)
+            return
+
+        # ── TEXT / EMAIL / TEL FIELDS ──
+        for keys, field_key in _FIELD_MAP:
+            value = CANDIDATE.get(field_key)
+            if not value:
+                continue
+            if any(k in hint for k in keys):
+                if field_key == "phone":
+                    local_val = CANDIDATE.get("phone_local")
+                    if local_val:
+                        value = local_val
+                await _fill(elem, value)
+                return
+
+        # ── TEXTAREA fallback ──
+        if tag == "textarea":
+            answer = _generate_safe_answer(hint) or "See attached resume for details"
+            await _fill(elem, answer)
+            return
+
+        # ── TEXT input fallback ──
+        if tag == "input" and input_type in ("text", "", "email", "tel"):
+            answer = _generate_safe_answer(hint) or "See attached resume for details"
+            await _fill(elem, answer)
             return
 
     # ── Combobox (custom JS dropdown) filling ─────────────────
@@ -784,6 +891,7 @@ class FormFiller:
             return
 
         # Read label text for each radio option
+        radio_options: list[tuple[ElementHandle, str]] = []
         for radio in radios:
             radio_id = await radio.get_attribute("id") or ""
             label = await page.evaluate(f"""\
@@ -793,7 +901,6 @@ class FormFiller:
                 }}
             """)
             if not label:
-                # Try to get the parent label
                 parent_text = await radio.evaluate("""\
                     el => {{
                         const parent = el.closest('label');
@@ -801,26 +908,75 @@ class FormFiller:
                     }}
                 """)
                 label = parent_text or ""
+            if label:
+                radio_options.append((radio, label))
 
-            if not label:
-                continue
+        if not radio_options:
+            return
 
-            # For yes/no groups
+        # Try keyword-based matching first
+        for radio, label in radio_options:
             if any(w in hint for w in ["authorization", "authorised", "eligible",
                                         "work permit", "remote", "relocate"]):
-                if "yes" in label:
+                if "yes" in label or "authorized" in label or "eligible" in label:
                     await radio.check()
                     return
-            # For experience/level groups
             elif any(w in hint for w in ["experience", "level", "years"]):
                 if any(kw in label for kw in ["0-1", "1", "fresher", "entry", "junior"]):
                     await radio.check()
                     return
-            # For education groups
             elif any(w in hint for w in ["education", "degree"]):
                 if any(kw in label for kw in ["bachelor", "graduate", "bca", "b.sc"]):
                     await radio.check()
                     return
+            elif any(w in hint for w in ["gender", "pronoun"]):
+                if any(kw in label for kw in ["male", "he/him", "he"]):
+                    await radio.check()
+                    return
+            elif any(w in hint for w in ["veteran", "military"]):
+                if any(kw in label for kw in ["no", "not a veteran", "prefer not"]):
+                    await radio.check()
+                    return
+            elif any(w in hint for w in ["disability", "disabled"]):
+                if any(kw in label for kw in ["no", "none", "prefer not", "i don't have"]):
+                    await radio.check()
+                    return
+
+        # AI-powered fallback for unknown radio groups
+        option_texts = [label for _, label in radio_options]
+        selected = await self._ai_select_option(hint, option_texts, None, "")
+        if selected:
+            for radio, label in radio_options:
+                if label == selected.lower() or selected.lower() in label or label in selected.lower():
+                    print(f"   [RADIO] AI selected: '{label[:40]}'")
+                    await radio.check()
+                    return
+
+        # Telegram ask flow
+        if self._interaction and self._interaction.available:
+            print(f"   [TELEGRAM] Asking user about radio group: '{hint[:40]}'")
+            reply = await self._interaction.ask(
+                question=f"Choose option for: {hint[:60]}",
+                options=option_texts,
+                timeout=300,
+            )
+            if reply:
+                reply_lower = reply.lower()
+                if reply.isdigit():
+                    idx = int(reply) - 1
+                    if 0 <= idx < len(radio_options):
+                        print(f"   [TELEGRAM] Selected #{reply}: '{option_texts[idx][:40]}'")
+                        await radio_options[idx][0].check()
+                        return
+                for radio, label in radio_options:
+                    if label == reply_lower or reply_lower in label or label in reply_lower:
+                        print(f"   [TELEGRAM] Selected: '{label[:40]}'")
+                        await radio.check()
+                        return
+
+        # Absolute last resort: check the first non-empty option
+        if radio_options:
+            await radio_options[0][0].check()
 
 
 # ── Generate safe answers for unknown form fields ────────────

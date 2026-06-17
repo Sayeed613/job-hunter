@@ -15,11 +15,14 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from app.ai.client import AIClient
 from app.browser.browser_manager import BrowserManager
 from app.browser.form_filler import FormFiller
 from app.browser.human import Human
 from app.browser.session import LoginSession
 from app.models.job import Job
+from app.notifier import LocalNotifier
+from app.telegram.interaction import TelegramInteraction
 
 logger = logging.getLogger("job_automation_bot")
 
@@ -39,10 +42,20 @@ class ApplicationRouter:
     with saved storage_state for login-required platforms.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        ai_client: Optional[AIClient] = None,
+        notifier: Optional[LocalNotifier] = None,
+        interaction: Optional[TelegramInteraction] = None,
+    ) -> None:
         self._browser: Optional[BrowserManager] = None
         self._initialised = False
         self._session = LoginSession()
+        self._ai_client = ai_client
+        self._notifier = notifier
+        self._interaction = interaction
+        # Track auto-login attempts so we don't retry failed logins endlessly
+        self._login_attempted: set[str] = set()
 
     async def ensure_browser(
         self,
@@ -52,8 +65,9 @@ class ApplicationRouter:
     ) -> None:
         """Lazy-init the browser with anti-detection.
 
-        Credentials are no longer needed here — login sessions are loaded
-        from storage_state files saved via ``--relogin``.
+        Now supports auto-login — if a session doesn't exist, the bot
+        will attempt to log in automatically when it encounters a login
+        wall.
         """
         if not self._initialised:
             self._browser = BrowserManager()
@@ -61,7 +75,7 @@ class ApplicationRouter:
             self._initialised = True
             logger.info(
                 "Available login sessions: %s",
-                self._session.list_available_sessions() or "none",
+                self._session.list_available_sessions() or "none (will auto-login)",
             )
 
     @property
@@ -89,6 +103,14 @@ class ApplicationRouter:
 
     # ── Session helpers ──────────────────────────────────────
 
+    def reset_login_attempts(self) -> None:
+        """Reset the auto-login attempt tracker between cycles.
+
+        Call this at the start of each cycle so platforms that failed
+        to auto-login in the previous cycle get another chance.
+        """
+        self._login_attempted.clear()
+
     def _platform_for_url(self, url: str) -> str | None:
         """Determine which platform session to use for a given URL."""
         for domain, platform in [
@@ -105,6 +127,139 @@ class ApplicationRouter:
     def _has_platform_session(self, platform: str) -> bool:
         """Check if a saved session exists for *platform*."""
         return self._session.has_session(platform)
+
+    # ── Auto-login ───────────────────────────────────────────
+
+    async def _auto_login(self, platform: str, page, retry_url: str = "") -> bool:
+        """Attempt to auto-login to a platform using stored credentials.
+
+        Navigates to the platform login page, fills email/password,
+        clicks login, waits for the redirect to a non-login URL,
+        then saves the session.
+
+        Args:
+            platform: "linkedin", "naukri", "wellfound", etc.
+            page: The Playwright page (currently on the login wall).
+            retry_url: After successful login, navigate back to this URL.
+
+        Returns:
+            True if login succeeded and session was saved.
+        """
+        # Only attempt once per platform per cycle
+        if platform in self._login_attempted:
+            logger.info("Auto-login already attempted for %s — not retrying", platform)
+            return False
+        self._login_attempted.add(platform)
+
+        email, password = self._session.get_credentials(platform)
+        if not email or not password:
+            logger.info("No stored credentials for %s — can't auto-login", platform)
+            return False
+
+        login_url = self._session.get_login_url(platform)
+        if not login_url:
+            logger.warning("No login URL known for %s", platform)
+            return False
+
+        logger.info("Attempting auto-login for %s...", platform)
+        if self._notifier:
+            await self._notifier.send_message(f"🔑 Auto-login to {platform}...")
+
+        try:
+            await page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
+            await Human.delay(2, 3)
+
+            # ── Fill email ──
+            email_sel = (
+                "input[name='session_key'], #username, input[type='email'], "
+                "input[name='email'], input[name='login'], "
+                "input[name='loginfmt']"
+            )
+            email_el = await page.query_selector(email_sel)
+            if email_el:
+                await email_el.click()
+                await Human.delay(0.3, 0.6)
+                await email_el.fill(email)
+                logger.info("Filled email for %s", platform)
+
+            # ── Fill password ──
+            pw_sel = (
+                "input[name='session_password'], #password, input[type='password'], "
+                "input[name='password'], input[name='pass']"
+            )
+            pw_el = await page.query_selector(pw_sel)
+            if pw_el:
+                await pw_el.click()
+                await Human.delay(0.3, 0.6)
+                await pw_el.fill(password)
+
+            # ── Click login button ──
+            btn_sel = (
+                "button[type='submit'], input[type='submit'], "
+                "button:has-text('Sign in'), button:has-text('Log in'), "
+                "button:has-text('Login'), button:has-text('Continue')"
+            )
+            btn = await page.query_selector(btn_sel)
+            if btn:
+                await btn.click()
+                await Human.delay(1, 2)
+            else:
+                # Try pressing Enter as fallback
+                await page.keyboard.press("Enter")
+                await Human.delay(1, 2)
+
+            # ── Wait for redirect away from login page ──
+            success_patterns = self._session.get_success_patterns(platform)
+            for _ in range(15):  # up to 15 seconds
+                current = page.url.lower()
+                if "login" not in current:
+                    # Check success patterns
+                    if success_patterns:
+                        if any(p in current for p in success_patterns):
+                            break
+                    else:
+                        break  # no patterns to check, assume success
+                await Human.delay(1, 1)
+
+            # Check if we're still on a login page
+            current = page.url.lower()
+            if "login" in current:
+                logger.warning(
+                    "Auto-login for %s failed — still on login page "
+                    "(CAPTCHA/2FA may be blocking). "
+                    "Run 'python main.py --relogin %s' manually.",
+                    platform, platform,
+                )
+                if self._notifier:
+                    await self._notifier.send_message(
+                        f"⚠️ Auto-login to {platform} failed — CAPTCHA/2FA may be blocking. "
+                        f"Run manually: python main.py --relogin {platform}"
+                    )
+                return False
+
+            # ── Save session ──
+            if self._browser:
+                ctx = await page.context()
+                await self._browser.save_platform_session(ctx, platform)
+                logger.info("✅ Auto-login successful for %s — session saved", platform)
+                if self._notifier:
+                    await self._notifier.send_message(f"✅ Auto-login to {platform} successful")
+
+                # Navigate back to the original URL if provided
+                if retry_url:
+                    logger.info("Navigating back to job URL after auto-login: %s", retry_url)
+                    await page.goto(retry_url, wait_until="networkidle")
+                    await Human.delay(2, 3)
+
+                return True
+
+            return False
+
+        except Exception as e:
+            logger.error("Auto-login for %s failed: %s", platform, e)
+            if self._notifier:
+                await self._notifier.send_message(f"⚠️ Auto-login to {platform} error: {e}")
+            return False
 
     # ── Shared helpers ───────────────────────────────────────
 
@@ -131,6 +286,12 @@ class ApplicationRouter:
             "[data-testid*='apply']",
             ".apply-btn",
             "#apply-button",
+            "[class*='apply-now']",
+            "[class*='submit-app']",
+            "button:has-text('Easy Apply')",
+            "button:has-text('Quick Apply')",
+            "button:has-text('Submit')",
+            "input[type='submit']",
             ":has-text('Apply for this job')",
             ":has-text('Apply Now')",
             ":has-text('Apply')",
@@ -147,13 +308,14 @@ class ApplicationRouter:
                     return True
             except Exception:
                 continue
-        # JavaScript fallback: click any visible element with 'Apply' text
+        # JavaScript fallback: click any visible element with Apply/Candidate text
         try:
             clicked = await page.evaluate("""() => {
-                const candidates = document.querySelectorAll('a, button, span');
+                const keywords = ['apply', 'candidate', 'submit', 'register', 'sign up', 'join us', 'continue'];
+                const candidates = document.querySelectorAll('a, button, span, div[role="button"]');
                 for (const el of candidates) {
                     const text = (el.textContent || '').toLowerCase().trim();
-                    if (text.includes('apply') && el.offsetParent !== null) {
+                    if (keywords.some(k => text.includes(k)) && el.offsetParent !== null) {
                         el.scrollIntoView({behavior: 'instant', block: 'center'});
                         el.click();
                         return true;
@@ -163,6 +325,7 @@ class ApplicationRouter:
             }""")
             if clicked:
                 logger.info("Clicked Apply button via JS fallback")
+                await Human.delay(1.0, 2.0)
                 return True
         except Exception:
             pass
@@ -218,10 +381,11 @@ class ApplicationRouter:
             await page.goto(job.apply_url, wait_until="networkidle")
             await Human.delay(2, 4)
 
-            # Check if we're on a login page (session expired)
+            # Check if we're on a login page (session expired) — auto-login
             if "login" in page.url.lower():
-                logger.warning("LinkedIn session expired — re-run: python main.py --relogin linkedin")
-                return False
+                logged_in = await self._auto_login("linkedin", page, retry_url=job.apply_url)
+                if not logged_in:
+                    return False
 
             # Click Easy Apply button
             btn = await page.query_selector(
@@ -235,7 +399,11 @@ class ApplicationRouter:
             await Human.click(page, "button.jobs-apply-button, button:has-text('Easy Apply')")
             await Human.delay(2, 3)
 
-            filler = FormFiller()
+            filler = FormFiller(
+                ai_client=self._ai_client,
+                notifier=self._notifier,
+                interaction=self._interaction,
+            )
 
             # Multi-step form — loop until Submit
             for step in range(8):
@@ -309,23 +477,51 @@ class ApplicationRouter:
                 return False
 
             await Human.delay(2, 4)
-            filler = FormFiller()
+            filler = FormFiller(
+                ai_client=self._ai_client,
+                notifier=self._notifier,
+                interaction=self._interaction,
+            )
             await filler.fill_form(page, resume_path, cover_letter_text)
             await Human.delay(1, 2)
 
             submit_selectors = [
                 "button[type='submit']", "input[type='submit']",
-                "text=Submit", "text=Submit Application",
-                "text=Send Application", "text=Complete Application",
+                "button:has-text('Submit')", "button:has-text('Submit Application')",
+                "button:has-text('Send Application')", "button:has-text('Complete Application')",
+                "button:has-text('Apply Now')", "button:has-text('Send')",
+                "button:has-text('Finish')", "button:has-text('Done')",
+                "[class*='submit']", "[class*='send-app']",
             ]
+            submitted = False
             for sel in submit_selectors:
                 try:
                     btn = await page.query_selector(sel)
                     if btn and await btn.is_visible():
                         await Human.click(page, sel)
+                        submitted = True
                         break
                 except Exception:
                     continue
+            # JS fallback: find any visible submit-capable element
+            if not submitted:
+                try:
+                    clicked = await page.evaluate("""() => {
+                        const sel = 'button[type="submit"], input[type="submit"], [class*="submit"], [class*="send"]';
+                        const btns = document.querySelectorAll(sel);
+                        for (const btn of btns) {
+                            if (btn.offsetParent !== null) {
+                                btn.scrollIntoView({behavior: 'instant', block: 'center'});
+                                btn.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    }""")
+                    if clicked:
+                        logger.info("Generic: clicked submit via JS fallback")
+                except Exception:
+                    pass
 
             await Human.delay(3, 5)
 
@@ -359,13 +555,11 @@ class ApplicationRouter:
             await page.goto(pre_url, wait_until="networkidle")
             await Human.delay(2, 4)
 
-            # Check for login wall on platforms that need session
+            # Check for login wall on platforms that need session — auto-login
             if platform and "login" in page.url.lower():
-                logger.warning(
-                    "%s session expired — re-run: python main.py --relogin %s",
-                    label, platform,
-                )
-                return False
+                logged_in = await self._auto_login(platform, page, retry_url=pre_url)
+                if not logged_in:
+                    return False
 
             # Click Apply button (if visible) to reveal the form
             clicked = await self._click_apply_button(page)
@@ -374,7 +568,11 @@ class ApplicationRouter:
             else:
                 logger.info("No Apply button on %s — form may already be visible", label)
 
-            filler = FormFiller()
+            filler = FormFiller(
+                ai_client=self._ai_client,
+                notifier=self._notifier,
+                interaction=self._interaction,
+            )
 
             # Multi-step form loop — handles Greenhouse/Lever/Ashby/Indeed multi-step forms
             submitted = False
@@ -399,8 +597,10 @@ class ApplicationRouter:
                 submit_selectors = [
                     "button[type='submit']", "input[type='submit']",
                     "button:has-text('Submit')", "button:has-text('Submit Application')",
-                    "button:has-text('Send Application')",
-                    "button:has-text('Complete Application')",
+                    "button:has-text('Send Application')", "button:has-text('Complete Application')",
+                    "button:has-text('Apply Now')", "button:has-text('Send')",
+                    "button:has-text('Finish')", "button:has-text('Done')",
+                    "[class*='submit']", "[class*='send-app']",
                 ]
                 for sel in submit_selectors:
                     try:

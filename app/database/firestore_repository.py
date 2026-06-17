@@ -1,89 +1,98 @@
-"""Firestore repository for the Job Automation Bot.
+"""Local JSON-file repository — replaces Firestore with zero external dependencies.
 
-Provides async CRUD operations for job and application documents.
+Stores application records in a local JSON file (``storage/applications.json``).
+Same interface as the old FirestoreRepository — drop-in replacement.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optionalhi
-
-from google.api_core.exceptions import GoogleAPICallError, NotFound
-from google.cloud.firestore import Client as FirestoreClient
-from google.cloud.firestore_v1.base_query import FieldFilter
+from pathlib import Path
+from typing import Any, Optional
 
 from app.models.application import Application
-from app.models.job import Job
 
 logger = logging.getLogger("job_automation_bot")
 
-_COLLECTION_APPLICATIONS = "applications"
-_COLLECTION_JOBS = "jobs"
+_APPLICATIONS_FILE = Path("storage/applications.json")
 
 
 class FirestoreRepository:
-    """Async data-access layer for Firestore collections.
+    """Local JSON-file data store for application records.
 
-    Uses the Firestore client obtained via the Firebase Admin SDK.
+    All methods are synchronous (no network calls). Data is persisted to
+    ``storage/applications.json``. If the file doesn't exist, an empty
+    store is assumed.
     """
 
-    def __init__(self, client: FirestoreClient | None = None) -> None:
-        self._client = client
+    def __init__(self, client: object = None) -> None:
+        """Initialise the repository.
 
-    def _db(self) -> FirestoreClient:
-        if self._client is None:
-            import firebase_admin
-            from firebase_admin import firestore
-            self._client = firestore.client()
-        return self._client
+        Args:
+            client: Ignored (kept for backward compatibility with Firestore API).
+        """
+        _ = client  # unused — kept for compat
+        self._applications: dict[str, dict[str, Any]] = {}
+        self._loaded = False
+
+    # ── Internal helpers ─────────────────────────────────────
+
+    def _ensure_loaded(self) -> None:
+        """Load applications from disk on first access."""
+        if self._loaded:
+            return
+        if _APPLICATIONS_FILE.exists():
+            try:
+                data = json.loads(_APPLICATIONS_FILE.read_text(encoding="utf-8"))
+                self._applications = data if isinstance(data, dict) else {}
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning("Failed to load applications file: %s", exc)
+                self._applications = {}
+        else:
+            self._applications = {}
+        self._loaded = True
+
+    def _save(self) -> None:
+        """Persist applications to disk."""
+        _APPLICATIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _APPLICATIONS_FILE.write_text(
+            json.dumps(self._applications, indent=2, default=str),
+            encoding="utf-8",
+        )
 
     # ── Application methods ──────────────────────────────────
 
-    def save_application(self, app: Application) -> str:
+    def save_application(self, app: Application) -> Optional[str]:
         """Save an application record. Returns the document ID."""
+        self._ensure_loaded()
         doc_id = self._application_doc_id(app)
-        doc_ref = self._db().collection(_COLLECTION_APPLICATIONS).document(doc_id)
-        doc_ref.set(self._application_to_dict(app), merge=True)
+        self._applications[doc_id] = self._application_to_dict(app)
+        self._save()
         logger.info("Application saved", extra={"doc_id": doc_id, "company": app.company})
         return doc_id
 
     def get_application(self, job_id: str) -> Optional[Application]:
         """Get an application by its job_id (sha256 of company+title)."""
-        try:
-            docs = (
-                self._db()
-                .collection(_COLLECTION_APPLICATIONS)
-                .where(filter=FieldFilter("job_id", "==", job_id))
-                .limit(1)
-                .get()
-            )
-            if docs and len(docs) > 0:
-                data = docs[0].to_dict()
-                if data:
-                    return self._dict_to_application(data)
-            return None
-        except (GoogleAPICallError, NotFound):
-            return None
+        self._ensure_loaded()
+        for doc_id, data in self._applications.items():
+            if data.get("job_id") == job_id:
+                return self._dict_to_application(data)
+        return None
 
     def list_recent_applications(self, limit: int = 50) -> list[Application]:
         """Return most recent applications."""
+        self._ensure_loaded()
+        sorted_apps = sorted(
+            self._applications.values(),
+            key=lambda a: a.get("applied_at") or "",
+            reverse=True,
+        )
         apps: list[Application] = []
-        try:
-            docs = (
-                self._db()
-                .collection(_COLLECTION_APPLICATIONS)
-                .order_by("applied_at", direction="DESCENDING")
-                .limit(limit)
-                .get()
-            )
-            for snapshot in docs:
-                data = snapshot.to_dict()
-                if data:
-                    apps.append(self._dict_to_application(data))
-        except (GoogleAPICallError, NotFound):
-            logger.exception("Failed to list applications")
+        for data in sorted_apps[:limit]:
+            apps.append(self._dict_to_application(data))
         return apps
 
     def get_stats(self) -> dict[str, Any]:
@@ -120,8 +129,8 @@ class FirestoreRepository:
             "salary": app.salary,
             "source": app.source,
             "apply_url": app.apply_url,
-            "posted_at": app.posted_at,
-            "applied_at": app.applied_at or datetime.now(timezone.utc),
+            "posted_at": str(app.posted_at) if app.posted_at else None,
+            "applied_at": str(app.applied_at) if app.applied_at else None,
             "status": app.status,
             "application_method": app.application_method,
             "resume_path": app.resume_path,
@@ -131,8 +140,8 @@ class FirestoreRepository:
             "error_message": app.error_message,
             "interview_status": app.interview_status,
             "notes": app.notes,
-            "created_at": app.created_at,
-            "updated_at": datetime.now(timezone.utc),
+            "created_at": str(app.created_at) if app.created_at else None,
+            "updated_at": str(app.updated_at) if app.updated_at else None,
         }
 
     @staticmethod
@@ -147,8 +156,8 @@ class FirestoreRepository:
             salary=data.get("salary"),
             source=data.get("source", ""),
             apply_url=data.get("apply_url", ""),
-            posted_at=data.get("posted_at"),
-            applied_at=_ensure_datetime(data.get("applied_at")),
+            posted_at=_parse_dt(data.get("posted_at")),
+            applied_at=_parse_dt(data.get("applied_at")),
             status=data.get("status", "applied"),
             application_method=data.get("application_method", ""),
             resume_path=data.get("resume_path", ""),
@@ -158,12 +167,18 @@ class FirestoreRepository:
             error_message=data.get("error_message"),
             interview_status=data.get("interview_status", "no_response"),
             notes=data.get("notes", ""),
-            created_at=_ensure_datetime(data.get("created_at")),
-            updated_at=_ensure_datetime(data.get("updated_at")),
+            created_at=_parse_dt(data.get("created_at")),
+            updated_at=_parse_dt(data.get("updated_at")),
         )
 
 
-def _ensure_datetime(value: object) -> datetime:
+def _parse_dt(value: object) -> Optional[datetime]:
+    """Parse a datetime string back to a datetime object."""
     if isinstance(value, datetime):
         return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
-    return datetime.now(timezone.utc)
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            pass
+    return None

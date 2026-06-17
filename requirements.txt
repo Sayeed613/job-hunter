@@ -5,13 +5,14 @@ playwright>=1.50
 python-docx>=1.1
 fpdf2>=2.8
 PyPDF2>=3.0
-firebase-admin>=6.0
 python-telegram-bot>=21.0
 APScheduler>=3.10
 tenacity>=8.0
 beautifulsoup4>=4.12
 requests>=2.31
 aiohttp>=3.9
+twilio>=9.0
+
 lxml>=5.0
 structlog>=24.0
 python-dotenv>=1.0

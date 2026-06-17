@@ -1,61 +1,11 @@
-"""Database package — Firebase Firestore initialisation and helpers."""
+"""Database package — local JSON-file persistence (no external services).
 
-from __future__ import annotations
+Stores application records in ``storage/applications.json``.
+No Firebase, no network calls, no configuration needed.
+"""
 
-import logging
-from typing import Optional
+from app.database.firestore_repository import FirestoreRepository
 
-from app.config.settings import Settings
-
-logger = logging.getLogger("job_automation_bot")
-
-_firebase_initialised = False
-
-
-def initialize(settings: Settings) -> None:
-    """Initialise the Firebase Admin SDK using service account credentials.
-
-    Args:
-        settings: Application settings with firebase_credentials_path
-            and firebase_project_id.
-    """
-    global _firebase_initialised
-    if _firebase_initialised:
-        return
-
-    if not settings.firebase_credentials_path:
-        logger.warning("FIREBASE_CREDENTIALS_PATH not set — Firebase disabled")
-        return
-
-    # Check that the credentials file actually exists before attempting init
-    import os
-    cred_path = settings.firebase_credentials_path
-    if not os.path.exists(cred_path):
-        logger.warning(
-            "Firebase credentials file not found at %s — Firebase disabled", cred_path
-        )
-        return
-
-    try:
-        import firebase_admin
-        from firebase_admin import credentials
-
-        cred = credentials.Certificate(cred_path)
-        firebase_admin.initialize_app(
-            cred,
-            options={"projectId": settings.firebase_project_id} if settings.firebase_project_id else None,
-        )
-        _firebase_initialised = True
-        logger.info("Firebase initialised successfully")
-    except Exception:
-        logger.exception("Failed to initialise Firebase")
-        _firebase_initialised = False
-
-
-def is_initialized() -> bool:
-    """Check if Firebase has been initialised."""
-    return _firebase_initialised
-
-
-# Re-export for convenience
-from app.database.firestore_repository import FirestoreRepository  # noqa: E402, F401
+__all__ = [
+    "FirestoreRepository",
+]
