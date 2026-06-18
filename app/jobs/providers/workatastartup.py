@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Optional
 
 from app.jobs.providers.base import BaseJobProvider
 from app.models.job import Job
+from app.utils.network import is_network_restricted_error, network_error_summary
 
 if TYPE_CHECKING:
     from app.browser.browser_manager import BrowserManager
@@ -90,23 +91,69 @@ class WorkAtAStartupProvider(BaseJobProvider):
                 await page.evaluate("window.scrollBy(0, 800)")
                 await page.wait_for_timeout(1500)
 
-            # Extract jobs from DOM
+            # Extract jobs from DOM with descriptions
             data = await page.evaluate("""() => {
-                const links = document.querySelectorAll('a[href*="/companies/"]');
+                const cards = document.querySelectorAll('[class*="job"], [class*="Job"], [data-testid*="card"], article, li[class]');
                 const seen = new Set();
-                return Array.from(links).slice(0, 50).map(link => {
+                const results = [];
+                
+                // Also try to find cards by company links
+                const links = document.querySelectorAll('a[href*="/companies/"]');
+                
+                // Use cards if found, otherwise use links
+                let items = cards.length > 3 ? cards : links;
+                
+                items.forEach(el => {
+                    // Get the actual card element
+                    const card = el.closest('[class*="job"], [class*="Job"], article, li[class]') || el;
+                    const allText = card.textContent || '';
+                    
+                    // Find the description element inside the card
+                    const descEl = card.querySelector('p, [class*="desc"], [class*="Desc"], [class*="summary"], [class*="Summary"], [data-testid*="desc"]');
+                    const description = descEl ? descEl.textContent.trim() : '';
+                    
+                    // Find the title link
+                    const link = card.querySelector('a[href*="/companies/"]') || el;
                     const href = link.href || '';
-                    if (seen.has(href)) return null;
+                    if (!href || seen.has(href)) return;
                     seen.add(href);
-                    const card = link.closest('[data-testid*="card"], .job-card, article, div[class*="job"], li') || link.parentElement;
-                    const text = card ? card.textContent : link.textContent;
-                    const lines = text.split('\\\\n').map(l => l.trim()).filter(l => l.length > 2);
-                    let title = lines.find(l => l.length > 3 && l.length < 150) || '';
-                    let company = lines.find(l => l !== title && l.length > 2 && l.length < 100) || 'YC Startup';
-                    // Try to find YC batch info
-                    const batch = lines.find(l => /\\\\b[WS]\\\\d{2}\\\\b/.test(l)) || '';
-                    return { title: title.slice(0, 150), url: href, company: company.slice(0, 100), batch };
-                }).filter(j => j && j.title);
+                    
+                    const textLines = allText.split('\\n').map(l => l.trim()).filter(l => l.length > 2);
+                    let title = '';
+                    let company = 'YC Startup';
+                    
+                    // Try to find title (first meaningful line in card)
+                    for (const line of textLines) {
+                        if (line.length > 3 && line.length < 150 && !line.includes('/companies/')) {
+                            title = line;
+                            break;
+                        }
+                    }
+                    if (!title && link.textContent) title = link.textContent.trim();
+                    if (!title) title = textLines[0] || '';
+                    
+                    // Try to find company name (different from title)
+                    for (const line of textLines) {
+                        if (line !== title && line.length > 2 && line.length < 100 && !line.includes('http')) {
+                            company = line;
+                            break;
+                        }
+                    }
+                    
+                    // Use description from dedicated element, or fallback to text not already used as title/company
+                    const finalDesc = description || textLines.filter(l => 
+                        l !== title && l !== company && l.length > 10 && l.length < 500
+                    ).slice(0, 2).join(' ');
+                    
+                    results.push({
+                        title: title.slice(0, 150),
+                        url: href,
+                        company: company.slice(0, 100),
+                        description: finalDesc.slice(0, 2000),
+                    });
+                });
+                
+                return results;
             }""")
 
             for item in data:
@@ -114,22 +161,31 @@ class WorkAtAStartupProvider(BaseJobProvider):
                     if not item:
                         continue
                     job_id = hashlib.sha256(f"ycb:{item['url']}".encode()).hexdigest()[:16]
+                    desc = item.get("description", "") or ""
                     jobs.append(Job(
                         job_id=job_id,
                         title=item["title"],
                         company=item.get("company", "YC Startup"),
-                        description="",
+                        description=desc[:2000],
                         location="Remote",
                         remote_type="Remote",
                         source="WorkAtAStartup",
                         apply_url=item["url"],
                         posted_at=datetime.now(timezone.utc),
                     ))
+                    if desc:
+                        logger.info("WorkAtAStartup: extracted description for %s (%d chars)", item["title"], len(desc))
                 except Exception:
                     continue
 
         except Exception as e:
-            logger.warning("WorkAtAStartup browser fetch failed: %s", e)
+            if is_network_restricted_error(e):
+                logger.warning(
+                    "WorkAtAStartup browser fetch skipped due to blocked network access: %s",
+                    network_error_summary(e),
+                )
+            else:
+                logger.warning("WorkAtAStartup browser fetch failed: %s", e)
         finally:
             await page.close()
 

@@ -11,6 +11,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from app.jobs.providers.base import BaseJobProvider
 from app.models.job import Job
+from app.utils.network import is_network_restricted_error, network_error_summary
 
 logger = logging.getLogger("job_automation_bot")
 
@@ -74,6 +75,12 @@ class RemoteOKProvider(BaseJobProvider):
                     continue
 
             logger.info("RemoteOK: fetched %d jobs", len(jobs))
-        except Exception:
-            logger.exception("RemoteOK fetch failed")
+        except Exception as exc:
+            if is_network_restricted_error(exc):
+                logger.warning(
+                    "RemoteOK skipped due to blocked network access: %s",
+                    network_error_summary(exc),
+                )
+            else:
+                logger.exception("RemoteOK fetch failed")
         return jobs

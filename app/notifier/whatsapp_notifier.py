@@ -13,6 +13,7 @@ from typing import Optional
 
 from app.config.settings import Settings
 from app.notifier.local_notifier import LocalNotifier
+from app.utils.network import is_network_restricted_error
 
 logger = logging.getLogger("job_automation_bot")
 
@@ -79,6 +80,11 @@ class WhatsAppNotifier:
             return (
                 "The destination number has not joined the Twilio WhatsApp sandbox yet. "
                 "Send the sandbox join code to the Twilio sandbox number first."
+            )
+        if is_network_restricted_error(error):
+            return (
+                "Outbound network access is blocked in this environment, so WhatsApp "
+                "delivery is unavailable for this run."
             )
         return (
             "Verify the Twilio account credentials, sender number, and recipient "

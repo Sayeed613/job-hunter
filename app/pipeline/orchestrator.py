@@ -207,6 +207,33 @@ class Pipeline:
         if skipped_due_to_title:
             logger.info("Title pre-filter: removed %d non-tech jobs, keeping %d", skipped_due_to_title, len(relevant_jobs))
 
+        # ── Description quality filter ──────────────────────────
+        # Jobs with empty/short descriptions can't be matched properly
+        # Skip them to avoid wasting AI API calls and time
+        jobs_with_desc: list[Job] = []
+        skipped_no_desc = 0
+        for job in relevant_jobs:
+            word_count = len(job.description.split()) if job.description else 0
+            logger.info(
+                "JD check — %s @ %s: %d words (source: %s)",
+                job.title, job.company, word_count, job.source,
+            )
+            if word_count < 5:
+                logger.info(
+                    "  → SKIP: empty/short description — can't match skills",
+                )
+                skipped_no_desc += 1
+            else:
+                jobs_with_desc.append(job)
+
+        if skipped_no_desc:
+            logger.info(
+                "Description filter: skipped %d/%d jobs with empty descriptions",
+                skipped_no_desc, len(relevant_jobs),
+            )
+
+        relevant_jobs = jobs_with_desc
+
         # ── Sort by relevance: score ALL jobs and take top N ─────────
         full_resume_text = self._resume_to_text(resume)
         scored_jobs: list[tuple[float, Job]] = []
@@ -217,10 +244,6 @@ class Pipeline:
             for kw in resume.skills:
                 if kw.lower() in title_lower:
                     score += 0.05
-            # Short description penalty — less data to match = less reliable
-            word_count = len(job.description.split()) if job.description else 0
-            if word_count < 20:
-                score *= 0.5
             scored_jobs.append((score, job))
 
         scored_jobs.sort(key=lambda x: x[0], reverse=True)
@@ -229,7 +252,7 @@ class Pipeline:
         await self._notifier.jobs_found(len(new_jobs), len(all_jobs))
         if not new_jobs:
             logger.info(
-                "No relevant jobs after title filter (%d total, %d passed location filter)",
+                "No relevant jobs after title+description filter (%d total, %d passed location filter)",
                 len(all_jobs), len(jobs),
             )
             return {"found": len(all_jobs), "applied": 0, "failed": 0, "skipped": len(all_jobs)}
@@ -247,14 +270,26 @@ class Pipeline:
                     job.apply_url,
                 )
 
-                # ── AI keyword extraction ────────────────────────
+                # ── AI keyword extraction (with full diagnostic logging) ──
                 ai_matched = 0
+                jd_word_count = len(job.description.split()) if job.description else 0
+                logger.info(
+                    "📋 Processing job %d/%d: %s @ %s — JD: %d words",
+                    i + 1, max_apply, job.title, job.company, jd_word_count,
+                )
+                logger.info("📋 JD preview: %s", job.description[:300] if job.description else "(empty)")
+
                 try:
                     keywords = await self._keyword_extractor.extract(job.description)
                     jd_keyword_count = len(keywords.get("hard_skills", []))
+                    logger.info("📋 AI extracted %d hard skills: %s", jd_keyword_count, keywords.get("hard_skills", []))
                     ai_matched = sum(
                         1 for s in keywords.get("hard_skills", [])
                         if s.lower() in " ".join(resume.skills).lower()
+                    )
+                    logger.info(
+                        "📋 Resume match: %d/%d skills match candidate profile",
+                        ai_matched, jd_keyword_count,
                     )
                     await self._notifier.tailoring(ai_matched, jd_keyword_count)
                 except Exception:
@@ -263,16 +298,24 @@ class Pipeline:
                     jd_keyword_count = 0
                     ai_matched = 0
 
-                # ── Match score check (AGGRESSIVE) ───────────────
+                # ── Match score check ────────────────────────────
                 match_score = self._quick_score(full_resume_text, job.description)
 
-                # AGGRESSIVE MODE: accept almost anything that passed the title filter
-                # Accept if AI matched 1+ hard skills, OR quick_score is above a very low threshold
+                # Combined score: use the better of AI skill ratio and word overlap
+                ai_skill_ratio = ai_matched / max(jd_keyword_count, 1)
+                combined_score = max(match_score, ai_skill_ratio)
+
+                logger.info(
+                    "📋 Score breakdown — word-overlap: %.3f, AI skill ratio: %.3f, combined: %.3f",
+                    match_score, ai_skill_ratio, combined_score,
+                )
+
                 min_ai = self._settings.min_ai_skills
                 min_score = self._settings.min_match_score
+                # Skip if BOTH AI skills AND word-overlap score are too low
                 if ai_matched < min_ai and match_score < min_score:
                     logger.info(
-                        "Skipping %s — score %.2f (AI %d/%d) below thresholds (%d / %.2f)",
+                        "⏭️ Skipping %s — score %.2f (AI %d/%d) below thresholds (min AI: %d, min score: %.2f)",
                         job.title, match_score, ai_matched, jd_keyword_count,
                         min_ai, min_score,
                     )
@@ -280,8 +323,8 @@ class Pipeline:
                     continue
 
                 logger.info(
-                    "Matched %s — score: %.2f, AI skills: %d/%d",
-                    job.title, match_score, ai_matched, jd_keyword_count,
+                    "✅ Matched %s — score: %.2f, AI skills: %d/%d, combined: %.2f",
+                    job.title, match_score, ai_matched, jd_keyword_count, combined_score,
                 )
 
                 # ── Resume tailoring ─────────────────────────────

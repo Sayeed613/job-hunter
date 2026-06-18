@@ -13,6 +13,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from app.jobs.providers.base import BaseJobProvider
 from app.models.job import Job
 from app.utils.http_headers import browser_headers
+from app.utils.network import is_network_restricted_error, network_error_summary
 
 logger = logging.getLogger("job_automation_bot")
 
@@ -123,6 +124,12 @@ class Web3CareerProvider(BaseJobProvider):
                         continue
 
             logger.info("Web3Career: fetched %d jobs", len(jobs))
-        except Exception:
-            logger.exception("Web3Career fetch failed")
+        except Exception as exc:
+            if is_network_restricted_error(exc):
+                logger.warning(
+                    "Web3Career skipped due to blocked network access: %s",
+                    network_error_summary(exc),
+                )
+            else:
+                logger.exception("Web3Career fetch failed")
         return jobs

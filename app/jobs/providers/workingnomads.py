@@ -13,6 +13,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from app.jobs.providers.base import BaseJobProvider
 from app.models.job import Job
 from app.utils.http_headers import api_headers
+from app.utils.network import is_network_restricted_error, network_error_summary
 
 if TYPE_CHECKING:
     from app.browser.browser_manager import BrowserManager
@@ -169,7 +170,13 @@ class WorkingNomadsProvider(BaseJobProvider):
                     continue
 
         except Exception as e:
-            logger.warning("WorkingNomads browser fetch failed: %s", e)
+            if is_network_restricted_error(e):
+                logger.warning(
+                    "WorkingNomads browser fetch skipped due to blocked network access: %s",
+                    network_error_summary(e),
+                )
+            else:
+                logger.warning("WorkingNomads browser fetch failed: %s", e)
         finally:
             await page.close()
 

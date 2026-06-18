@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Optional
 
 from app.jobs.providers.base import BaseJobProvider
 from app.models.job import Job
+from app.utils.network import is_network_restricted_error, network_error_summary
 
 if TYPE_CHECKING:
     from app.browser.browser_manager import BrowserManager
@@ -73,8 +74,14 @@ class GlassdoorProvider(BaseJobProvider):
                 await page.close()
 
             logger.info("Glassdoor: fetched %d jobs", len(jobs))
-        except Exception:
-            logger.exception("Glassdoor fetch failed")
+        except Exception as exc:
+            if is_network_restricted_error(exc):
+                logger.warning(
+                    "Glassdoor skipped due to blocked network access: %s",
+                    network_error_summary(exc),
+                )
+            else:
+                logger.exception("Glassdoor fetch failed")
         return jobs
 
     async def _parse_card(self, card) -> Job | None:
